@@ -4,7 +4,7 @@ services:
   - type: web
     name: vidya-ops
     runtime: node
-    plan: starter          # always-on; the free plan sleeps after 15 min
+    plan: free          # always-on; the free plan sleeps after 15 min
     region: singapore      # closest Render region to Chennai
     buildCommand: npm ci && npm run build
     # Migrations run on every deploy, before the new version goes live.
