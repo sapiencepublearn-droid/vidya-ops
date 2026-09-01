@@ -1,32 +1,31 @@
-# Render reads this and configures the service for you.
-# The database is Neon (free), so only the web service is defined here.
+# Render reads this and configures the service.
+# Database is Neon (free tier), so only the web service is defined here.
 services:
   - type: web
     name: vidya-ops
     runtime: node
-    plan: free          # always-on; the free plan sleeps after 15 min
+    plan: free             # sleeps after 15 min idle; see README on keeping it awake
     region: singapore      # closest Render region to Chennai
     buildCommand: npm ci && npm run build
-    # Migrations run on every deploy, before the new version goes live.
-    preDeployCommand: npm run deploy:migrate
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: JWT_SECRET
-        generateValue: true      # Render generates and stores it
+        generateValue: true          # Render generates and stores it
       - key: FILE_SECRET
         generateValue: true
-      - key: STORAGE_DIR
-        value: /var/data/storage
+      # Free plans have no persistent disk, so uploads go in the database.
+      # Switch to 'disk' (with a disk attached) or 's3' on a paid plan.
+      - key: STORAGE_DRIVER
+        value: db
+      # Free plans have no pre-deploy hook, so migrations run at startup.
+      - key: RUN_MIGRATIONS_ON_BOOT
+        value: "true"
       - key: DATABASE_URL
-        sync: false              # paste your Neon connection string
+        sync: false                  # paste your Neon connection string
       - key: ADMIN_DATABASE_URL
-        sync: false              # same string for now; used by migrations
+        sync: false                  # same string; used by migrations
       - key: CORS_ORIGINS
-        sync: false              # your final https URL
-    disk:
-      name: uploads
-      mountPath: /var/data
-      sizeGB: 1                  # bills and attachments live here
+        sync: false                  # your final https URL, no trailing slash
