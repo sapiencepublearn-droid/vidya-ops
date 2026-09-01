@@ -1,0 +1,32 @@
+# Render reads this and configures the service for you.
+# The database is Neon (free), so only the web service is defined here.
+services:
+  - type: web
+    name: vidya-ops
+    runtime: node
+    plan: starter          # always-on; the free plan sleeps after 15 min
+    region: singapore      # closest Render region to Chennai
+    buildCommand: npm ci && npm run build
+    # Migrations run on every deploy, before the new version goes live.
+    preDeployCommand: npm run deploy:migrate
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true      # Render generates and stores it
+      - key: FILE_SECRET
+        generateValue: true
+      - key: STORAGE_DIR
+        value: /var/data/storage
+      - key: DATABASE_URL
+        sync: false              # paste your Neon connection string
+      - key: ADMIN_DATABASE_URL
+        sync: false              # same string for now; used by migrations
+      - key: CORS_ORIGINS
+        sync: false              # your final https URL
+    disk:
+      name: uploads
+      mountPath: /var/data
+      sizeGB: 1                  # bills and attachments live here

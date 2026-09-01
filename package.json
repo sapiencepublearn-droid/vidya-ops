@@ -1,0 +1,43 @@
+{
+  "name": "phase1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 'test/*.test.js'",
+    "migrate": "node-pg-migrate up -m migrations",
+    "migrate:down": "node-pg-migrate down -m migrations",
+    "start": "node -e \"import('./src/app.js').then(m=>m.start())\"",
+    "backup": "bash scripts/backup.sh",
+    "web": "vite --config web/vite.config.js",
+    "web:build": "vite build --config web/vite.config.js",
+    "icons": "node scripts/make-icons.mjs",
+    "build": "vite build --config web/vite.config.js",
+    "deploy:migrate": "node-pg-migrate up -m migrations"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.23.0",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sharp": "^0.35.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "vite": "^8.2.2"
+  }
+}

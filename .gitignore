@@ -1,0 +1,9 @@
+node_modules/
+dist/
+storage/
+.env
+.env.*
+!.env.example
+*.dump
+*.sha256
+.DS_Store
