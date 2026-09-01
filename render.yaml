@@ -6,12 +6,18 @@ services:
     runtime: node
     plan: free             # sleeps after 15 min idle; see README on keeping it awake
     region: singapore      # closest Render region to Chennai
-    buildCommand: npm ci && npm run build
+    # --include=dev is required: NODE_ENV=production makes npm skip
+    # devDependencies, and Vite (the frontend build tool) is one of them.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
+      # Pinned: the app is tested on 22. Render otherwise picks the latest
+      # major, which is how an untested runtime reaches production.
+      - key: NODE_VERSION
+        value: "22"
       - key: JWT_SECRET
         generateValue: true          # Render generates and stores it
       - key: FILE_SECRET
