@@ -60,8 +60,8 @@ export async function reset() {
     `INSERT INTO locations (kind,name,latitude,longitude,radius_metres)
      VALUES ('office','Head Office',13.041800,80.234100,100) RETURNING *`)).rows[0];
   const school = (await db.query(
-    `INSERT INTO locations (kind,name,latitude,longitude,radius_metres)
-     VALUES ('school','ABC School',13.082700,80.270700,100) RETURNING *`)).rows[0];
+    `INSERT INTO locations (kind,name,zone,latitude,longitude,radius_metres)
+     VALUES ('school','ABC School','Thiruporur',13.082700,80.270700,100) RETURNING *`)).rows[0];
 
   const pw = await hashPassword('correct-horse-battery');
   const mk = async (code, name, role, email, isAdmin, claims) => (await db.query(

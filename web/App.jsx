@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, createContext, useContext, use
 import { createClient, ApiError, readFix, newActionKey } from './api-client.js';
 import { LatCard, LatScreen, AdminLat } from './Lat.jsx';
 import { BroadcastCard, BroadcastList, AdminBroadcasts } from './Broadcast.jsx';
+import { AdminSchools } from './Schools.jsx';
+import { PunchPanel } from './Punch.jsx';
 
 /* ═══════════════════════════════════════════════════════════════ tokens */
 
@@ -461,8 +463,8 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews
 
       <BroadcastCard T={T} broadcasts={broadcasts} onOpen={onOpenNews} />
 
-      <CheckInBlock att={att} loading={attendance.loading} error={attendance.error}
-        site={profile.data} onDone={attendance.reload} onRetry={attendance.reload} />
+      <PunchPanel T={T} api={api} att={att} loading={attendance.loading} error={attendance.error}
+        onDone={attendance.reload} onRetryLoad={attendance.reload} M={M} Btn={Btn} />
 
       <LatCard T={T} lat={lat} onOpen={onOpenLat} />
 
@@ -475,128 +477,6 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews
                 {tasks.data.map((t) => <TaskRow key={t.task_id} task={t} onOpen={() => onOpenTask(t.task_id)} />)}
               </div>}
       </div>
-    </div>
-  );
-}
-
-/**
- * The client reads the device fix and posts it. Whether the fix is close
- * enough, accurate enough or genuine is decided by the API, so every
- * refusal here is a server message rendered verbatim.
- */
-function CheckInBlock({ att, loading, error, site, onDone, onRetry }) {
-  const T = useT();
-  const api = useApi();
-  const [busy, setBusy] = useState(false);
-  const [stage, setStage] = useState(null);
-  const [problem, setProblem] = useState(null);
-  const [reporting, setReporting] = useState(false);
-  const [reported, setReported] = useState(false);
-  // Held across retries of the same tap, so a lost response cannot become
-  // a second check-in when the employee presses again.
-  const actionKey = useRef(null);
-
-  /** Maps a failure to the reason recorded on an incident report. */
-  const reasonFor = (e) => ({
-    outside_radius: 'outside_radius', poor_accuracy: 'poor_accuracy',
-    mock_location: 'mock_location', location_denied: 'permission_denied',
-    no_geolocation: 'gps_unavailable', network_error: 'network_unavailable',
-  }[e?.code] || (e?.status >= 500 ? 'server_unavailable' : 'other'));
-
-  const act = async (mode) => {
-    setBusy(true); setProblem(null); setReported(false);
-    if (!actionKey.current) actionKey.current = newActionKey();
-    try {
-      setStage('Checking your location…');
-      const fix = await readFix();
-      setStage('Confirming with the server…');
-      // Nothing is shown as done until the server has actually confirmed it.
-      await (mode === 'in' ? api.checkIn(fix, actionKey.current) : api.checkOut(fix, actionKey.current));
-      actionKey.current = null;
-      await onDone();
-    } catch (e) {
-      setProblem({ ...e, message: e.message, code: e.code, status: e.status, mode });
-    } finally {
-      setBusy(false); setStage(null);
-    }
-  };
-
-  const report = async () => {
-    setReporting(true);
-    try {
-      await api.reportIncident({
-        kind: problem.mode === 'in' ? 'check_in' : 'check_out',
-        reason: reasonFor(problem),
-        note: problem.message?.slice(0, 900),
-      }, newActionKey());
-      setReported(true);
-    } catch (e) {
-      // Already reported today is a success from the employee's point of view.
-      setReported(e.code === 'incident_exists');
-      if (e.code !== 'incident_exists') setProblem({ ...problem, message: e.message });
-    } finally {
-      setReporting(false);
-    }
-  };
-
-  if (loading) return <div style={{ marginBottom: 40 }}><Eyebrow>Attendance</Eyebrow><Skel h={44} w="60%" /></div>;
-  if (error) return <div style={{ marginBottom: 40 }}><Eyebrow>Attendance</Eyebrow><ErrorBlock error={error} onRetry={onRetry} /></div>;
-
-  return (
-    <div style={{ marginBottom: 40 }}>
-      <Eyebrow right={att ? <Status state={att.status} /> : null}>Attendance</Eyebrow>
-
-      {!att && (<>
-        <div className="tight" style={{ fontSize: 24, fontWeight: 600, marginBottom: 4 }}>Not checked in</div>
-        <div style={{ fontSize: 12, color: T.mute, marginBottom: 24 }}>{site?.site_name || ''}</div>
-        <Btn variant="accent" full busy={busy} onClick={() => act('in')}>
-          {busy ? 'Reading location' : 'Check in'}
-        </Btn>
-      </>)}
-
-      {att && !att.check_out_time && (<>
-        <div className="tight" style={{ fontSize: 34, fontWeight: 600, lineHeight: 1, marginBottom: 6 }}>{istTime(att.check_in_time)}</div>
-        <M style={{ fontSize: 11, color: T.faint, display: 'block', marginBottom: 24 }}>
-          {att.site_name}{att.check_in_accuracy ? `, ±${att.check_in_accuracy} m` : ''}
-        </M>
-        <Btn variant="line" full busy={busy} onClick={() => act('out')}>
-          {busy ? 'Reading location' : 'Check out'}
-        </Btn>
-      </>)}
-
-      {att?.check_out_time && (<>
-        <div className="tight" style={{ fontSize: 22, fontWeight: 600 }}>
-          {istTime(att.check_in_time)} – {istTime(att.check_out_time)}
-        </div>
-        <div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>Total {duration(att.check_in_time, att.check_out_time)}</div>
-      </>)}
-
-      {busy && stage && (
-        <div className="fade" style={{ fontSize: 12, color: T.mute, marginTop: 14 }}>{stage}</div>
-      )}
-
-      {problem && !reported && (
-        <div className="fade" style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 13, color: T.accent, lineHeight: 1.5 }}>{problem.message}</div>
-          {problem.requestId && (
-            <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 6 }}>
-              ref {problem.requestId.slice(0, 8)}
-            </M>
-          )}
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-            <Btn variant="line" onClick={() => act(problem.mode)} busy={busy}>Try again</Btn>
-            {/* Only after a retry has failed, so this is not the easy path. */}
-            <Btn variant="line" onClick={report} busy={reporting}>Report the problem</Btn>
-          </div>
-        </div>
-      )}
-
-      {reported && (
-        <div className="pop" style={{ fontSize: 13, color: T.mute, marginTop: 16, lineHeight: 1.5 }}>
-          Reported. Your admin has been told, and will sort it out.
-          Your attendance for today is still not recorded.
-        </div>
-      )}
     </div>
   );
 }
@@ -763,10 +643,22 @@ function EAttendance({ profile }) {
           : !history.data.length ? <Blank title="No attendance recorded yet" />
             : <div style={{ borderTop: `1px solid ${T.line}` }}>
               {history.data.map((a) => (
-                <div key={a.attendance_id} className="row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
-                  <M style={{ fontSize: 11, color: T.faint, width: 48, flexShrink: 0 }}>{istDateShort(a.work_date)}</M>
-                  <div style={{ flex: 1 }}><Status state={a.status} /></div>
-                  <M style={{ fontSize: 11, color: T.mute }}>
+                <div key={a.attendance_id} className="row" style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                    <M style={{ fontSize: 11, color: T.faint, width: 48, flexShrink: 0 }}>{istDateShort(a.work_date)}</M>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Type, place and zone as the server recorded them. */}
+                      <div style={{ fontSize: 13 }}>
+                        {a.location_type === 'SCHOOL' ? 'School' : a.location_type === 'OFFICE' ? 'Office' : '—'}
+                        {a.site_name ? ` · ${a.site_name}` : ''}
+                      </div>
+                      {a.site_zone && (
+                        <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 3 }}>{a.site_zone}</M>
+                      )}
+                    </div>
+                    <Status state={a.status} />
+                  </div>
+                  <M style={{ fontSize: 11, color: T.mute, display: 'block', marginTop: 6, paddingLeft: 60 }}>
                     {a.check_in_time ? `${istTime(a.check_in_time)} – ${a.check_out_time ? istTime(a.check_out_time) : '—'}` : ''}
                   </M>
                 </div>
@@ -991,7 +883,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   const api = useApi();
   const isPhone = useIsPhone();
   const [page, setPage] = useState('dashboard');
-  const nav = [['dashboard', 'Today'], ['news', 'Notices'], ['words', 'Words'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit']];
+  const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'Words'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit']];
 
   const body = (
     <main key={page} className="rise" style={{
@@ -1000,6 +892,8 @@ function Admin({ me, onOut, theme, setTheme }) {
       maxWidth: isPhone ? '100%' : 1100,
     }}>
       {page === 'dashboard' && <ADash isPhone={isPhone} />}
+      {page === 'attendance' && <AAttendance isPhone={isPhone} />}
+      {page === 'schools' && <ASchools isPhone={isPhone} />}
       {page === 'news' && <ANews isPhone={isPhone} />}
       {page === 'words' && <AWords isPhone={isPhone} />}
       {page === 'claims' && <AClaims isPhone={isPhone} />}
@@ -1122,6 +1016,61 @@ function ADash({ isPhone }) {
           </div>
         ))}
       </div>
+    </>
+  );
+}
+
+function ASchools({ isPhone }) {
+  const T = useT();
+  const api = useApi();
+  return <AdminSchools T={T} api={api} isPhone={isPhone} useResource={useResource}
+    Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} Blank={Blank} M={M} />;
+}
+
+/** Read-only view of who was where today. */
+function AAttendance({ isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const [date, setDate] = useState(today);
+  const rows = useResource(() => api.admin.attendance(date), [date]);
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 24 }}>
+        <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Attendance</h1>
+        <input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)}
+          className="mono" style={{
+            padding: '8px 12px', borderRadius: 8, fontSize: 13, background: 'transparent',
+            border: `1px solid ${T.line}`, color: T.text, outline: 'none',
+          }} />
+      </div>
+
+      {rows.loading ? <Rows n={5} />
+        : rows.error ? <ErrorBlock error={rows.error} onRetry={rows.reload} />
+          : <div style={{ borderTop: `1px solid ${T.line}` }}>
+            {rows.data.map((r) => (
+              <div key={r.employee_id} style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{r.employee_name}</div>
+                    <div style={{ fontSize: 12, color: T.mute, marginTop: 3 }}>
+                      {r.check_in_time
+                        ? `${r.location_type === 'SCHOOL' ? 'School' : 'Office'} · ${r.site_name || '—'}${r.site_zone ? ` · ${r.site_zone}` : ''}`
+                        : r.role}
+                    </div>
+                  </div>
+                  <Status state={r.status || 'Absent'} />
+                </div>
+                {r.check_in_time && (
+                  <M style={{ fontSize: 12, color: T.mute, display: 'block', marginTop: 8 }}>
+                    {istTime(r.check_in_time)} – {r.check_out_time ? istTime(r.check_out_time) : 'still in'}
+                    {r.check_in_accuracy ? ` · ±${r.check_in_accuracy} m` : ''}
+                  </M>
+                )}
+              </div>
+            ))}
+          </div>}
     </>
   );
 }

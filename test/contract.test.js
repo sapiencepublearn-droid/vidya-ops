@@ -10,7 +10,7 @@ import { createClient } from '../web/api-client.js';
  * This catches the class of bug where a rename leaves a dead call that
  * only shows up when a user taps the button.
  */
-const app = ['../web/App.jsx', '../web/Lat.jsx', '../web/Broadcast.jsx']
+const app = ['../web/App.jsx', '../web/Lat.jsx', '../web/Broadcast.jsx', '../web/Schools.jsx', '../web/Punch.jsx']
   .map((f) => fs.readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
 // Every module that mounts routes must be scanned, or the check silently
 // passes for endpoints it cannot see.

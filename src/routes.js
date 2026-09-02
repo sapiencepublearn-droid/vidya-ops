@@ -141,23 +141,42 @@ router.get('/me', wrap(async (req, res) => {
 
 /* ───────────────────────────────────────────────────────── attendance */
 
-async function permittedSites(employeeId) {
-  const { rows } = await pool.query(
-    `SELECT l.location_id, l.kind, l.name, l.latitude, l.longitude, l.radius_metres
+async function permittedSites(actor) {
+  // Assignment-restricted, unchanged from the existing model: an employee
+  // may punch in at their own office, or at a school explicitly assigned
+  // to them. Widening this to "any active school" would weaken an existing
+  // control, so it is a business decision, not an implementation detail.
+  // Runs with actor context: trainer_assignments has forced RLS, so a bare
+  // pool query would see no assignments and no school would ever match.
+  const { rows } = await tx(actor, (c) => c.query(
+    `SELECT l.location_id, l.kind, l.name, l.zone, l.latitude, l.longitude, l.radius_metres
        FROM locations l JOIN employees e ON e.office_location_id = l.location_id
       WHERE e.employee_id = $1 AND l.is_active
       UNION
-     SELECT l.location_id, l.kind, l.name, l.latitude, l.longitude, l.radius_metres
+     SELECT l.location_id, l.kind, l.name, l.zone, l.latitude, l.longitude, l.radius_metres
        FROM trainer_assignments ta JOIN locations l ON l.location_id = ta.location_id
       WHERE ta.employee_id = $1 AND l.is_active AND ta.valid_from <= ist_today()
-        AND (ta.valid_to IS NULL OR ta.valid_to >= ist_today())`, [employeeId]);
+        AND (ta.valid_to IS NULL OR ta.valid_to >= ist_today())`, [actor.id]));
   return rows.map((r) => ({
-    id: r.location_id, kind: r.kind, name: r.name,
+    id: r.location_id, kind: r.kind, name: r.name, zone: r.zone,
     lat: Number(r.latitude), lng: Number(r.longitude), radius: r.radius_metres,
   }));
 }
 
-/** The server decides whether a fix is acceptable. The client never does. */
+/**
+ * The server decides where the employee is. The client only reports GPS.
+ *
+ * Order matters: an office match wins outright, because an office and a
+ * school could in principle overlap and the office is the more specific
+ * answer. Only if no office matches are schools considered.
+ *
+ * Where two schools both contain the point, the nearer one wins — but only
+ * if it is clearly nearer. A near-tie is reported as ambiguous rather than
+ * guessed, because a wrong school on an attendance record is worse than
+ * asking the employee to report it.
+ */
+const AMBIGUITY_MARGIN_M = 15;
+
 function verifyFix(sites, fix) {
   if (fix.isMocked) {
     throw unprocessable('This device is reporting a mock location. Turn off the mock location app and try again.', 'mock_location');
@@ -168,25 +187,45 @@ function verifyFix(sites, fix) {
   if (!sites.length) {
     throw unprocessable('No check-in location is registered for you. Ask your admin to set one.', 'no_site');
   }
-  const nearest = sites
-    .map((s) => ({ site: s, distance: metresBetween({ lat: fix.latitude, lng: fix.longitude }, s) }))
-    .sort((a, b) => a.distance - b.distance)[0];
 
-  if (nearest.distance > nearest.site.radius) {
-    throw unprocessable(
-      `You are ${nearest.distance} m from ${nearest.site.name}. Check-in is allowed within ${nearest.site.radius} m.`,
-      'outside_radius');
+  const measured = sites
+    .map((s) => ({ site: s, distance: metresBetween({ lat: fix.latitude, lng: fix.longitude }, s) }))
+    .sort((a, b) => a.distance - b.distance);
+
+  const inside = measured.filter((m) => m.distance <= m.site.radius);
+
+  // Step 1: office wins if the employee is inside one.
+  const office = inside.find((m) => m.site.kind === 'office');
+  if (office) return office;
+
+  // Step 2: schools, nearest first.
+  const schools = inside.filter((m) => m.site.kind === 'school');
+  if (schools.length === 1) return schools[0];
+  if (schools.length > 1) {
+    const [first, second] = schools;
+    if (second.distance - first.distance < AMBIGUITY_MARGIN_M) {
+      throw unprocessable(
+        `You appear to be between ${first.site.name} and ${second.site.name}. Move closer to the one you are visiting and try again.`,
+        'ambiguous_location',
+        { candidates: schools.slice(0, 3).map((m) => ({ name: m.site.name, zone: m.site.zone, distanceMetres: m.distance })) });
+    }
+    return first;
   }
-  return nearest;
+
+  // Step 3: nothing matched. The nearest is named so the message is useful.
+  const nearest = measured[0];
+  throw unprocessable(
+    `You are ${nearest.distance} m from ${nearest.site.name}. Check-in is allowed within ${nearest.site.radius} m.`,
+    'outside_radius');
 }
 
 router.get('/attendance/sites', wrap(async (req, res) => {
-  res.json(await permittedSites(req.user.id));
+  res.json(await permittedSites(req.user));
 }));
 
 router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
-  const sites = await permittedSites(req.user.id);
+  const sites = await permittedSites(req.user);
   const { site, distance } = verifyFix(sites, fix);
 
   const result = await tx(req.user, async (c) => {
@@ -223,12 +262,18 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   });
 
   if (!result) throw conflict('You have already checked in today.', 'already_checked_in');
-  res.status(201).json({ attendance: result, site: site.name, distanceMetres: distance });
+  // The server reports what it matched. The client never chose it.
+  res.status(201).json({
+    attendance: result,
+    locationType: site.kind === 'office' ? 'OFFICE' : 'SCHOOL',
+    location: site.name, zone: site.zone ?? null,
+    site: site.name, distanceMetres: distance,
+  });
 })));
 
 router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
-  const sites = await permittedSites(req.user.id);
+  const sites = await permittedSites(req.user);
   const { site, distance } = verifyFix(sites, fix);
 
   const row = await tx(req.user, async (c) => {
@@ -244,19 +289,199 @@ router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
         WHERE attendance_id = $1 RETURNING *`,
       [cur.attendance_id, fix.latitude, fix.longitude, fix.accuracy, site.id, distance, fix.device ?? {}])).rows[0];
   });
-  res.json({ attendance: row, site: site.name, distanceMetres: distance });
+  // A school visit gets a draft the employee can review and send. Office
+  // attendance does not: there is no group expecting an update.
+  const visit = row.check_in_location_id
+    ? (await pool.query(`SELECT kind, name, zone FROM locations WHERE location_id = $1`,
+        [row.check_in_location_id])).rows[0]
+    : null;
+
+  res.json({
+    attendance: row,
+    locationType: site.kind === 'office' ? 'OFFICE' : 'SCHOOL',
+    location: site.name, zone: site.zone ?? null,
+    site: site.name, distanceMetres: distance,
+    visitDraft: visit?.kind === 'school'
+      ? buildVisitDraft({ school: visit.name, zone: visit.zone,
+          checkIn: row.check_in_time, checkOut: row.check_out_time })
+      : null,
+  });
 })));
+
+/**
+ * The WhatsApp message text, built on the server from the stored
+ * attendance record so it cannot disagree with what actually happened.
+ *
+ * Sapience Team never sends this. It hands the employee prepared text;
+ * they pick the group and press Send. No WhatsApp API, no credentials.
+ */
+function buildVisitDraft({ school, zone, checkIn, checkOut }) {
+  const t = (v) => new Date(v).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true })
+    .replace(/\s*(am|pm)$/i, (m) => m.toUpperCase());
+  const day = new Date(checkIn).toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
+  return [
+    'School Visit Update', '',
+    `Date: ${day}`, '',
+    `School: ${school}`,
+    `Zone: ${zone ?? '-'}`, '',
+    `Punch In: ${t(checkIn)}`,
+    `Punch Out: ${checkOut ? t(checkOut) : '-'}`, '',
+    'School visit completed.',
+  ].join('\n');
+}
 
 router.get('/attendance/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
   const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : null;
+  // Type and zone come from the location the server matched at punch-in,
+  // so history shows what actually happened rather than anything the
+  // client believed at the time.
   const { rows } = await tx(req.user, (c) => c.query(
-    `SELECT a.*, l.name AS site_name FROM attendance a
+    `SELECT a.*, l.name AS site_name, l.zone AS site_zone,
+            CASE WHEN l.kind = 'office' THEN 'OFFICE'
+                 WHEN l.kind = 'school' THEN 'SCHOOL' END AS location_type
+       FROM attendance a
        LEFT JOIN locations l ON l.location_id = a.check_in_location_id
       WHERE a.employee_id = $1 AND ($2::text IS NULL OR to_char(a.work_date,'YYYY-MM') = $2)
       ORDER BY a.work_date DESC LIMIT $3 OFFSET $4`,
     [req.user.id, month, limit, offset]));
   res.json(rows);
+}));
+
+/** Admin view of everyone's attendance for a day. Read-only. */
+router.get('/admin/attendance', adminOnly, wrap(async (req, res) => {
+  const { limit, offset } = page(req.query);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : null;
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT e.employee_id, e.name AS employee_name, e.role,
+            a.attendance_id, a.work_date, a.check_in_time, a.check_out_time,
+            a.check_in_accuracy, a.status,
+            l.name AS site_name, l.zone AS site_zone,
+            CASE WHEN l.kind = 'office' THEN 'OFFICE'
+                 WHEN l.kind = 'school' THEN 'SCHOOL' END AS location_type
+       FROM employees e
+       LEFT JOIN attendance a ON a.employee_id = e.employee_id
+            AND a.work_date = COALESCE($1::date, ist_today())
+       LEFT JOIN locations l ON l.location_id = a.check_in_location_id
+      WHERE e.status = 'Active'
+      ORDER BY e.name LIMIT $2 OFFSET $3`, [date, limit, offset]));
+  res.json(rows);
+}));
+
+/* ───────────────────────────────────────────────────── school directory */
+
+const schoolSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  zone: z.string().trim().min(1).max(80),
+  address: z.string().trim().max(400).optional(),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radiusMetres: z.number().int().min(20).max(2000).default(100),
+  isActive: z.boolean().default(true),
+}).strict();
+
+/** Employees may read the directory; only admins may change it. */
+router.get('/schools', wrap(async (req, res) => {
+  const { limit, offset } = page(req.query);
+  const q = (req.query.q || '').trim();
+  const { rows } = await pool.query(
+    `SELECT location_id, name, zone, address, latitude, longitude, radius_metres, is_active
+       FROM locations
+      WHERE kind = 'school'
+        AND ($1::boolean IS NULL OR is_active = $1)
+        AND ($2 = '' OR name ILIKE '%'||$2||'%' OR zone ILIKE '%'||$2||'%')
+      ORDER BY is_active DESC, zone, name LIMIT $3 OFFSET $4`,
+    [req.query.active === undefined ? null : req.query.active === 'true', q, limit, offset]);
+  res.json(rows);
+}));
+
+router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT location_id, name, zone, address, latitude, longitude, radius_metres, is_active, created_at, updated_at
+       FROM locations WHERE location_id = $1 AND kind = 'school'`, [req.params.id]);
+  if (!rows[0]) throw notFound('That school does not exist.');
+
+  // trainer_assignments has forced RLS, so this needs actor context too.
+  const assigned = (await tx(req.user, (c) => c.query(
+    `SELECT e.employee_id, e.name, e.role FROM trainer_assignments ta
+       JOIN employees e ON e.employee_id = ta.employee_id
+      WHERE ta.location_id = $1 AND (ta.valid_to IS NULL OR ta.valid_to >= ist_today())
+      ORDER BY e.name`, [req.params.id]))).rows;
+
+  // Visits come from existing attendance rows; nothing is duplicated.
+  // Must run inside tx(): attendance has forced RLS, and a bare pool query
+  // has no actor context, so it would return nothing even for an admin.
+  const visits = (await tx(req.user, (c) => c.query(
+    `SELECT a.work_date, e.name AS employee_name, a.check_in_time, a.check_out_time
+       FROM attendance a JOIN employees e ON e.employee_id = a.employee_id
+      WHERE a.check_in_location_id = $1
+      ORDER BY a.work_date DESC LIMIT 20`, [req.params.id]))).rows;
+
+  res.json({ ...rows[0], assignedEmployees: assigned, recentVisits: visits });
+}));
+
+router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
+  const f = parse(schoolSchema, req.body);
+  const out = await tx(req.user, async (c) => {
+    try {
+      return (await c.query(
+        `INSERT INTO locations (kind, name, zone, address, latitude, longitude, radius_metres, is_active)
+         VALUES ('school',$1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [f.name, f.zone, f.address ?? null, f.latitude, f.longitude, f.radiusMetres, f.isActive])).rows[0];
+    } catch (e) {
+      if (e.code === '23505') throw conflict('A school with that name already exists.', 'school_exists');
+      throw e;
+    }
+  }, { reason: 'school created' });
+  res.status(201).json(out);
+})));
+
+router.patch('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
+  const f = parse(schoolSchema.partial().strict(), req.body);
+  if (!Object.keys(f).length) throw badRequest('Nothing to change.');
+
+  const out = await tx(req.user, async (c) => {
+    const cur = (await c.query(
+      `SELECT * FROM locations WHERE location_id=$1 AND kind='school' FOR UPDATE`, [req.params.id])).rows[0];
+    if (!cur) throw notFound('That school does not exist.');
+    // Deactivating never deletes: historical attendance still points here.
+    return (await c.query(
+      `UPDATE locations SET name=$2, zone=$3, address=$4, latitude=$5, longitude=$6,
+              radius_metres=$7, is_active=$8
+        WHERE location_id=$1 RETURNING *`,
+      [req.params.id,
+       f.name ?? cur.name, f.zone ?? cur.zone, f.address ?? cur.address,
+       f.latitude ?? cur.latitude, f.longitude ?? cur.longitude,
+       f.radiusMetres ?? cur.radius_metres,
+       f.isActive === undefined ? cur.is_active : f.isActive])).rows[0];
+  }, { reason: f.isActive === false ? 'school deactivated' : 'school updated' });
+  res.json(out);
+})));
+
+/** Who may punch in where. Kept explicit because it is a security rule. */
+router.post('/admin/schools/:id/assign', uuidParam('id'), adminOnly, wrap(async (req, res) => {
+  const f = parse(z.object({ employeeId: uuid, remove: z.boolean().default(false) }).strict(), req.body);
+  const out = await tx(req.user, async (c) => {
+    const school = (await c.query(
+      `SELECT location_id, name FROM locations WHERE location_id=$1 AND kind='school'`, [req.params.id])).rows[0];
+    if (!school) throw notFound('That school does not exist.');
+
+    if (f.remove) {
+      await c.query(
+        `UPDATE trainer_assignments SET valid_to = ist_today()
+          WHERE employee_id=$1 AND location_id=$2 AND (valid_to IS NULL OR valid_to >= ist_today())`,
+        [f.employeeId, req.params.id]);
+      return { assigned: false };
+    }
+    await c.query(
+      `INSERT INTO trainer_assignments (employee_id, location_id) VALUES ($1,$2)
+       ON CONFLICT (employee_id, location_id, valid_from) DO NOTHING`,
+      [f.employeeId, req.params.id]);
+    return { assigned: true };
+  }, { reason: f.remove ? 'school assignment removed' : 'school assignment added' });
+  res.json(out);
 }));
 
 /* ────────────────────────────────────────────────────── broadcasts */

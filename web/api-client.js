@@ -95,6 +95,11 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     myIncidents: () => request('/attendance/incidents/me'),
     myAttendance: (month) => request(`/attendance/me${month ? `?month=${month}` : ''}`),
 
+    // The directory is readable by any signed-in employee; changing it is
+    // admin-only and lives under admin below.
+    schools: (params = '') => request(`/schools${params}`),
+    school: (id) => request(`/schools/${id}`),
+
     myTasks: (view) => request(`/tasks/me${view ? `?view=${view}` : ''}`),
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
@@ -132,6 +137,11 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       approve: (id, key) => request(`/admin/submissions/${id}/approve`, { method: 'POST', idempotencyKey: key }),
       returnWork: (id, reason, key) => request(`/admin/submissions/${id}/return`, { method: 'POST', body: { reason }, idempotencyKey: key }),
       audit: () => request('/admin/audit'),
+      attendance: (date) => request(`/admin/attendance${date ? `?date=${date}` : ''}`),
+      createSchool: (body, key) => request('/admin/schools', { method: 'POST', body, idempotencyKey: key }),
+      updateSchool: (id, body, key) => request(`/admin/schools/${id}`, { method: 'PATCH', body, idempotencyKey: key }),
+      assignSchool: (id, employeeId, remove) =>
+        request(`/admin/schools/${id}/assign`, { method: 'POST', body: { employeeId, remove } }),
       broadcasts: () => request('/admin/broadcasts'),
       publishBroadcast: (body, key) => request('/admin/broadcasts', { method: 'POST', body, idempotencyKey: key }),
       publishWords: (words, date) => request('/admin/lat/sets', { method: 'POST', body: { words, ...(date ? { date } : {}) } }),
