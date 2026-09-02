@@ -1,4 +1,4 @@
-# Sapience Team— Daily Operations CRM (Phase 1)
+# Vidya Publications — Daily Operations CRM (Phase 1)
 
 A small, secure operations tool for five employees: GPS-verified
 attendance, task lifecycle with review, reimbursement claims with

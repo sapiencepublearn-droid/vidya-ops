@@ -1195,9 +1195,15 @@ function AEmployees({ isPhone }) {
   const T = useT();
   const api = useApi();
   const staff = useResource(() => api.admin.employees(), []);
+  const [adding, setAdding] = useState(false);
+
   return (
     <>
-      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 32px' }}>Employees</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 32 }}>
+        <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Employees</h1>
+        <Btn onClick={() => setAdding(true)}>Add employee</Btn>
+      </div>
+
       {staff.loading ? <Rows n={5} />
         : staff.error ? <ErrorBlock error={staff.error} onRetry={staff.reload} />
           : <div style={{ borderTop: `1px solid ${T.line}` }}>
@@ -1211,7 +1217,7 @@ function AEmployees({ isPhone }) {
                   <Status state={e.status === 'Active' ? 'Completed' : 'Absent'} />
                 </div>
                 <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 12, color: T.mute }}>{e.role}</span>
+                  <span style={{ fontSize: 12, color: T.mute }}>{e.role}{e.is_admin ? ' · admin' : ''}</span>
                   <M style={{ fontSize: 12, color: e.claims_enabled ? T.text : T.faint }}>
                     {e.claims_enabled ? `₹${e.cap_food} / ₹${e.cap_stay}` : 'no reimbursement'}
                   </M>
@@ -1219,7 +1225,203 @@ function AEmployees({ isPhone }) {
               </div>
             ))}
           </div>}
+
+      {adding && (
+        <AddEmployee isPhone={isPhone} onClose={() => setAdding(false)}
+          onDone={() => { setAdding(false); staff.reload(); }} />
+      )}
     </>
+  );
+}
+
+/**
+ * Creating an account is the one place an admin sets someone else's
+ * password, so the form states plainly that it must be passed on: there is
+ * no invite email in this system and adding a mail service is not
+ * warranted for a team of this size.
+ */
+function AddEmployee({ onClose, onDone, isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const [f, setF] = useState({
+    name: '', role: 'Trainer', email: '', phone: '', password: '',
+    claimsEnabled: false, capFood: 500, capStay: 1500,
+  });
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const [created, setCreated] = useState(null);
+
+  const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
+  const incomplete = !f.name.trim() || !f.email.trim() || f.password.length < 12;
+
+  const submit = async () => {
+    setBusy(true); setProblem(null);
+    try {
+      const emp = await api.admin.createEmployee({
+        name: f.name.trim(), role: f.role, email: f.email.trim().toLowerCase(),
+        ...(f.phone.trim() ? { phone: f.phone.trim() } : {}),
+        password: f.password, isAdmin: false,
+        claimsEnabled: f.claimsEnabled,
+        capFood: Number(f.capFood) || 0, capStay: Number(f.capStay) || 0,
+      });
+      setCreated({ ...emp, password: f.password });
+    } catch (e) {
+      setProblem(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.12em', color: T.faint, marginBottom: 8 };
+  const field = {
+    width: '100%', padding: '10px 12px', borderRadius: 8, fontSize: 14, background: 'transparent',
+    border: `1px solid ${T.line}`, color: T.text, outline: 'none', fontFamily: 'inherit',
+  };
+
+  return (
+    <div className="fade" style={{
+      position: 'fixed', inset: 0, background: T.overlay, zIndex: 60,
+      display: 'flex', alignItems: isPhone ? 'flex-end' : 'center', justifyContent: 'center', padding: isPhone ? 0 : 16,
+    }}>
+      <div className="rise" style={{
+        width: '100%', maxWidth: 480, background: T.bg, padding: 28,
+        borderRadius: isPhone ? '16px 16px 0 0' : 16, border: `1px solid ${T.line}`,
+        maxHeight: '92vh', overflowY: 'auto',
+      }}>
+        {created ? (
+          <>
+            <div className="tight" style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
+              {created.name} added
+            </div>
+            <div style={{ fontSize: 13, color: T.mute, lineHeight: 1.6, marginBottom: 24 }}>
+              Give them these details. The password is not shown again, and there is
+              no email invitation — you pass it on yourself.
+            </div>
+            <div style={{ border: `1px solid ${T.line}`, borderRadius: 12, padding: 16, marginBottom: 24 }}>
+              {[['Employee ID', created.employee_code], ['Email', created.email], ['Password', created.password]].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0' }}>
+                  <span style={{ fontSize: 12, color: T.mute }}>{k}</span>
+                  <M style={{ fontSize: 13, wordBreak: 'break-all', textAlign: 'right' }}>{v}</M>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Btn variant="line" full onClick={() => { setCreated(null); setF({ ...f, name: '', email: '', phone: '', password: '' }); }}>
+                Add another
+              </Btn>
+              <Btn full onClick={onDone}>Done</Btn>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
+              <div className="tight" style={{ fontSize: 18, fontWeight: 600 }}>Add employee</div>
+              <button className="press" onClick={onClose}
+                style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <div className="mono" style={label}>Name</div>
+              <input value={f.name} autoFocus onChange={(e) => set({ name: e.target.value })}
+                placeholder="Full name" style={field} />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <div className="mono" style={label}>Role</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {['Trainer', 'Admin', 'Accountant', 'Content Writer', 'Designer'].map((r) => {
+                  const on = f.role === r;
+                  return (
+                    <button key={r} className="press" onClick={() => set({ role: r })} style={{
+                      padding: '8px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer',
+                      background: on ? T.text : 'transparent', color: on ? T.bg : T.mute,
+                      border: `1px solid ${on ? T.text : T.line}`,
+                    }}>{r}</button>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: T.faint, marginTop: 8 }}>
+                Trainers check in at a school; everyone else at the office.
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 20 }}>
+              <div>
+                <div className="mono" style={label}>Email (their login)</div>
+                <input value={f.email} type="email" onChange={(e) => set({ email: e.target.value })}
+                  placeholder="name@company.in" style={field} />
+              </div>
+              <div>
+                <div className="mono" style={label}>Phone</div>
+                <input value={f.phone} onChange={(e) => set({ phone: e.target.value })}
+                  placeholder="+91" style={{ ...field, fontFamily: '"JetBrains Mono", monospace' }} />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <div className="mono" style={label}>Password</div>
+              <input value={f.password} onChange={(e) => set({ password: e.target.value })}
+                placeholder="At least 12 characters" style={field} />
+              <div style={{ fontSize: 12, color: f.password && f.password.length < 12 ? T.accent : T.faint, marginTop: 8 }}>
+                {f.password && f.password.length < 12
+                  ? `${12 - f.password.length} more characters needed`
+                  : 'You choose it and tell them. They can change it later.'}
+              </div>
+            </div>
+
+            <div style={{ paddingTop: 20, borderTop: `1px solid ${T.line}`, marginBottom: 20 }}>
+              <button className="press" onClick={() => set({ claimsEnabled: !f.claimsEnabled })}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'none', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'left', color: T.text }}>
+                <span style={{
+                  width: 34, height: 20, borderRadius: 999, position: 'relative', flexShrink: 0,
+                  background: f.claimsEnabled ? T.accent : T.line, transition: 'background .18s',
+                }}>
+                  <span style={{
+                    position: 'absolute', width: 14, height: 14, borderRadius: '50%', top: 3,
+                    left: f.claimsEnabled ? 17 : 3, background: T.bg, transition: 'left .18s cubic-bezier(.2,.8,.3,1)',
+                  }} />
+                </span>
+                <span>
+                  <span style={{ fontSize: 14, display: 'block' }}>Reimbursement</span>
+                  <span style={{ fontSize: 12, color: T.mute }}>Adds the Claims tab to their app</span>
+                </span>
+              </button>
+            </div>
+
+            {f.claimsEnabled && (
+              <div className="rise" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 20 }}>
+                {[['Food, per day', 'capFood'], ['Stay, per day', 'capStay']].map(([lbl, k]) => (
+                  <div key={k}>
+                    <div className="mono" style={label}>{lbl}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: `1px solid ${T.line}`, borderRadius: 8, padding: '0 12px' }}>
+                      <M style={{ fontSize: 14, color: T.faint }}>₹</M>
+                      <input type="number" value={f[k]} onChange={(e) => set({ [k]: e.target.value })}
+                        className="mono" style={{ flex: 1, padding: '10px 0', border: 'none', background: 'transparent', color: T.text, outline: 'none', fontSize: 14 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {problem && (
+              <div className="fade" style={{ fontSize: 13, color: T.accent, marginBottom: 16, lineHeight: 1.5 }}>
+                {problem.message}
+                {problem.details?.length > 0 && (
+                  <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                    {problem.details.map((d, i) => <li key={i}>{d.field}: {d.message}</li>)}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Btn variant="line" full onClick={onClose}>Cancel</Btn>
+              <Btn full busy={busy} disabled={incomplete} onClick={submit}>Create account</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
