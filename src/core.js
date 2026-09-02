@@ -30,6 +30,9 @@ export const config = (() => {
     lockoutMinutes: Number(process.env.LOCKOUT_MINUTES || 15),
     statementTimeoutMs: Number(process.env.STATEMENT_TIMEOUT_MS || 5000),
     loginRateMax: Number(process.env.LOGIN_RATE_MAX || 10),
+    resetRateMax: Number(process.env.RESET_RATE_MAX || 5),
+    uploadRateMax: Number(process.env.UPLOAD_RATE_MAX || 40),
+    resetTtlMinutes: Number(process.env.RESET_TTL_MINUTES || 30),
   };
   // In production an empty CORS allowlist means the browser app cannot
   // reach the API at all, which is a misconfiguration worth failing on.
@@ -72,12 +75,16 @@ pool.on('error', (err) => logger.error({ err }, 'idle database client error'));
  * means the setting dies with the transaction and cannot leak to the
  * next request that borrows this pooled connection.
  */
-export async function tx(actor, fn) {
+export async function tx(actor, fn, { reason } = {}) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SELECT set_config($1,$2,true)', ['app.actor_id', actor?.id ?? '']);
     await client.query('SELECT set_config($1,$2,true)', ['app.is_admin', actor?.isAdmin ? 'true' : 'false']);
+    // Read by write_audit(), so an audit row can be traced to the exact
+    // request a user reported, and carries why a decision was made.
+    await client.query('SELECT set_config($1,$2,true)', ['app.request_id', actor?.reqId ?? '']);
+    await client.query('SELECT set_config($1,$2,true)', ['app.reason', reason ?? '']);
     const out = await fn(client);
     await client.query('COMMIT');
     return out;
@@ -96,6 +103,60 @@ export async function dbHealth() {
   const started = Date.now();
   const { rows } = await pool.query('SELECT 1 AS ok, ist_today() AS business_date');
   return { ok: rows[0].ok === 1, businessDate: rows[0].business_date, latencyMs: Date.now() - started };
+}
+
+/**
+ * Three states, because "up" and "down" is not enough to act on.
+ *
+ *   healthy  — everything works
+ *   degraded — serving requests, but something is wrong: slow database,
+ *              storage unreachable, migrations behind. Worth waking up for
+ *              in the morning, not at 2am.
+ *   down     — cannot serve. The database is unreachable.
+ *
+ * Deliberately a single endpoint with no external dependency, so free
+ * uptime monitoring can consume it. Anything heavier is not warranted for
+ * a ten-person team.
+ */
+export async function fullHealth() {
+  const checks = {};
+  let status = 'healthy';
+  const degrade = () => { if (status === 'healthy') status = 'degraded'; };
+
+  try {
+    const db = await dbHealth();
+    checks.database = { ok: true, latencyMs: db.latencyMs, businessDate: db.businessDate };
+    if (db.latencyMs > 1000) { checks.database.slow = true; degrade(); }
+  } catch (e) {
+    checks.database = { ok: false, error: 'unreachable' };
+    return { status: 'down', checks };
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT count(*)::int AS applied, max(run_on) AS last_run FROM pgmigrations`);
+    checks.migrations = { ok: true, applied: rows[0].applied, lastRun: rows[0].last_run };
+  } catch {
+    checks.migrations = { ok: false, error: 'cannot read migration table' };
+    degrade();
+  }
+
+  try {
+    if ((process.env.STORAGE_DRIVER || 'disk') === 'db') {
+      await pool.query('SELECT 1 FROM file_blobs LIMIT 1');
+      checks.storage = { ok: true, driver: 'db' };
+    } else {
+      const fsp = await import('node:fs/promises');
+      await fsp.mkdir(config.storageDir, { recursive: true });
+      await fsp.access(config.storageDir);
+      checks.storage = { ok: true, driver: 'disk' };
+    }
+  } catch {
+    checks.storage = { ok: false, error: 'storage not writable' };
+    degrade();
+  }
+
+  return { status, checks };
 }
 
 /* ─────────────────────────────────────────────────────────────── errors */

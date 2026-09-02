@@ -10,8 +10,8 @@ import { createClient } from '../web/api-client.js';
  * This catches the class of bug where a rename leaves a dead call that
  * only shows up when a user taps the button.
  */
-const app = fs.readFileSync(new URL('../web/App.jsx', import.meta.url), 'utf8')
-  + fs.readFileSync(new URL('../web/Lat.jsx', import.meta.url), 'utf8');
+const app = ['../web/App.jsx', '../web/Lat.jsx', '../web/Broadcast.jsx']
+  .map((f) => fs.readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
 // Every module that mounts routes must be scanned, or the check silently
 // passes for endpoints it cannot see.
 const routes = ['../src/routes.js', '../src/lat.js']
@@ -54,10 +54,15 @@ test('the token is not persisted to browser storage', () => {
   const code = clientSrc
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
-  assert.equal(/localStorage|sessionStorage|document\.cookie/.test(code), false,
-    'the token must stay in memory');
-  assert.equal(/localStorage|sessionStorage/.test(app.replace(/\/\*[\s\S]*?\*\//g, '')), false,
+  // Writing to or reading from browser storage is forbidden. Clearing it on
+  // logout is the opposite of persistence and is required by the privacy
+  // requirement, so .clear() is explicitly allowed.
+  const persists = /(localStorage|sessionStorage)\s*\.\s*(setItem|getItem)|document\.cookie\s*=/;
+  assert.equal(persists.test(code), false, 'the token must stay in memory');
+  assert.equal(persists.test(app.replace(/\/\*[\s\S]*?\*\//g, '')), false,
     'the UI must not persist the session either');
+  assert.ok(/caches\.delete|localStorage\?\.clear/.test(code),
+    'logout must clear any local state for the next person on a shared phone');
 });
 
 test('every client path is backed by a route in the API', () => {

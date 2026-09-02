@@ -1,7 +1,7 @@
 {
-  "name": "Vidya Daily Operations",
-  "short_name": "Daily Ops",
-  "description": "Attendance, tasks, claims and daily words",
+  "name": "Sapience Team",
+  "short_name": "Sapience Team",
+  "description": "Attendance, tasks, claims, announcements and daily words",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

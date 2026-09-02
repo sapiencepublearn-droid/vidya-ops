@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, createContext, useContext, useRef } from 'react';
-import { createClient, ApiError, readFix } from './api-client.js';
+import { createClient, ApiError, readFix, newActionKey } from './api-client.js';
 import { LatCard, LatScreen, AdminLat } from './Lat.jsx';
+import { BroadcastCard, BroadcastList, AdminBroadcasts } from './Broadcast.jsx';
 
 /* ═══════════════════════════════════════════════════════════════ tokens */
 
@@ -66,6 +67,20 @@ const greeting = () => {
   const h = Number(new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false }));
   return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
 };
+
+/** True below the tablet breakpoint. Drives layout, not just styling. */
+function useIsPhone(breakpoint = 768) {
+  const [phone, setPhone] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < breakpoint : false);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width:${breakpoint - 1}px)`);
+    const on = (e) => setPhone(e.matches);
+    setPhone(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [breakpoint]);
+  return phone;
+}
 
 /**
  * Every remote read goes through this: loading and error are states the
@@ -239,7 +254,9 @@ function Styles({ T }) {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
       *{font-family:Inter,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;box-sizing:border-box}
-      body{margin:0}
+      html,body{margin:0;overflow-x:hidden;max-width:100%}
+      #root{overflow-x:hidden}
+      img,svg{max-width:100%}
       .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
       .tight{letter-spacing:-.035em}
       input:focus,textarea:focus,select:focus{border-color:${T.text}!important}
@@ -280,7 +297,7 @@ function Brand({ size = 28, showName = true }) {
       )}
       {showName && (
         <span className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.16em', color: T.text }}>
-          Vidya Publications
+          Sapience Team
         </span>
       )}
     </div>
@@ -330,7 +347,7 @@ function Login({ onIn, expired, theme, setTheme }) {
       </header>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 24px 80px' }}>
         <form className="rise" onSubmit={submit} style={{ width: '100%', maxWidth: 330 }}>
-          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>Daily Operations</h1>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>Sapience Team</h1>
           <p style={{ fontSize: 14, color: T.mute, margin: '0 0 40px' }}>Sign in with your work email.</p>
 
           {expired && (
@@ -372,8 +389,10 @@ function Employee({ me, onOut, theme, setTheme }) {
   const [tab, setTab] = useState('home');
   const [openTask, setOpenTask] = useState(null);
   const [latOpen, setLatOpen] = useState(false);
+  const [newsOpen, setNewsOpen] = useState(false);
   const profile = useResource(() => api.me(), []);
   const lat = useResource(() => api.latToday(), []);
+  const broadcasts = useResource(() => api.broadcasts(), []);
 
   const nav = [
     ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'],
@@ -384,14 +403,16 @@ function Employee({ me, onOut, theme, setTheme }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: 420, minHeight: '100vh', borderLeft: `1px solid ${T.line}`, borderRight: `1px solid ${T.line}`, paddingBottom: 84, position: 'relative' }}>
-        <div key={latOpen ? 'lat' : openTask || tab} className="rise">
-          {latOpen ? <LatScreen T={T} api={api} lat={lat} onBack={() => { setLatOpen(false); lat.reload(); }} />
+        <div key={newsOpen ? 'news' : latOpen ? 'lat' : openTask || tab} className="rise">
+          {newsOpen ? <BroadcastList T={T} api={api} broadcasts={broadcasts} onBack={() => setNewsOpen(false)} />
+            : latOpen ? <LatScreen T={T} api={api} lat={lat} onBack={() => { setLatOpen(false); lat.reload(); }} />
             : openTask ? <TaskDetail id={openTask} onBack={() => setOpenTask(null)} />
-            : tab === 'home' ? <EHome me={me} profile={profile} onOpenTask={setOpenTask} lat={lat} onOpenLat={() => setLatOpen(true)} />
+            : tab === 'home' ? <EHome me={me} profile={profile} onOpenTask={setOpenTask} lat={lat}
+                onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
               : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
                 : tab === 'attendance' ? <EAttendance profile={profile} />
                   : tab === 'claims' ? <EClaims profile={profile} />
-                    : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} />}
+                    : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} onOpenNews={() => setNewsOpen(true)} />}
         </div>
 
         <nav style={{
@@ -399,9 +420,9 @@ function Employee({ me, onOut, theme, setTheme }) {
           background: T.bg, borderTop: `1px solid ${T.line}`,
         }}>
           {nav.map(([k, label]) => {
-            const on = tab === k && !openTask && !latOpen;
+            const on = tab === k && !openTask && !latOpen && !newsOpen;
             return (
-              <button key={k} className="press" onClick={() => { setOpenTask(null); setLatOpen(false); setTab(k); }}
+              <button key={k} className="press" onClick={() => { setOpenTask(null); setLatOpen(false); setNewsOpen(false); setTab(k); }}
                 style={{
                   flex: 1, padding: '14px 0', background: 'none', border: 'none', cursor: 'pointer',
                   color: on ? T.text : T.faint, fontSize: 12, position: 'relative',
@@ -417,7 +438,7 @@ function Employee({ me, onOut, theme, setTheme }) {
   );
 }
 
-function EHome({ me, profile, onOpenTask, lat, onOpenLat }) {
+function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews }) {
   const T = useT();
   const api = useApi();
   const attendance = useResource(() => api.myAttendance(), []);
@@ -437,6 +458,8 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat }) {
           {istDateLong(new Date())}
         </M>
       </div>
+
+      <BroadcastCard T={T} broadcasts={broadcasts} onOpen={onOpenNews} />
 
       <CheckInBlock att={att} loading={attendance.loading} error={attendance.error}
         site={profile.data} onDone={attendance.reload} onRetry={attendance.reload} />
@@ -465,18 +488,54 @@ function CheckInBlock({ att, loading, error, site, onDone, onRetry }) {
   const T = useT();
   const api = useApi();
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState(null);
   const [problem, setProblem] = useState(null);
+  const [reporting, setReporting] = useState(false);
+  const [reported, setReported] = useState(false);
+  // Held across retries of the same tap, so a lost response cannot become
+  // a second check-in when the employee presses again.
+  const actionKey = useRef(null);
+
+  /** Maps a failure to the reason recorded on an incident report. */
+  const reasonFor = (e) => ({
+    outside_radius: 'outside_radius', poor_accuracy: 'poor_accuracy',
+    mock_location: 'mock_location', location_denied: 'permission_denied',
+    no_geolocation: 'gps_unavailable', network_error: 'network_unavailable',
+  }[e?.code] || (e?.status >= 500 ? 'server_unavailable' : 'other'));
 
   const act = async (mode) => {
-    setBusy(true); setProblem(null);
+    setBusy(true); setProblem(null); setReported(false);
+    if (!actionKey.current) actionKey.current = newActionKey();
     try {
+      setStage('Checking your location…');
       const fix = await readFix();
-      await (mode === 'in' ? api.checkIn(fix) : api.checkOut(fix));
+      setStage('Confirming with the server…');
+      // Nothing is shown as done until the server has actually confirmed it.
+      await (mode === 'in' ? api.checkIn(fix, actionKey.current) : api.checkOut(fix, actionKey.current));
+      actionKey.current = null;
       await onDone();
     } catch (e) {
-      setProblem(e);
+      setProblem({ ...e, message: e.message, code: e.code, status: e.status, mode });
     } finally {
-      setBusy(false);
+      setBusy(false); setStage(null);
+    }
+  };
+
+  const report = async () => {
+    setReporting(true);
+    try {
+      await api.reportIncident({
+        kind: problem.mode === 'in' ? 'check_in' : 'check_out',
+        reason: reasonFor(problem),
+        note: problem.message?.slice(0, 900),
+      }, newActionKey());
+      setReported(true);
+    } catch (e) {
+      // Already reported today is a success from the employee's point of view.
+      setReported(e.code === 'incident_exists');
+      if (e.code !== 'incident_exists') setProblem({ ...problem, message: e.message });
+    } finally {
+      setReporting(false);
     }
   };
 
@@ -512,9 +571,30 @@ function CheckInBlock({ att, loading, error, site, onDone, onRetry }) {
         <div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>Total {duration(att.check_in_time, att.check_out_time)}</div>
       </>)}
 
-      {problem && (
-        <div className="fade" style={{ fontSize: 13, color: T.accent, marginTop: 16, lineHeight: 1.5 }}>
-          {problem.message}
+      {busy && stage && (
+        <div className="fade" style={{ fontSize: 12, color: T.mute, marginTop: 14 }}>{stage}</div>
+      )}
+
+      {problem && !reported && (
+        <div className="fade" style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 13, color: T.accent, lineHeight: 1.5 }}>{problem.message}</div>
+          {problem.requestId && (
+            <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 6 }}>
+              ref {problem.requestId.slice(0, 8)}
+            </M>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <Btn variant="line" onClick={() => act(problem.mode)} busy={busy}>Try again</Btn>
+            {/* Only after a retry has failed, so this is not the easy path. */}
+            <Btn variant="line" onClick={report} busy={reporting}>Report the problem</Btn>
+          </div>
+        </div>
+      )}
+
+      {reported && (
+        <div className="pop" style={{ fontSize: 13, color: T.mute, marginTop: 16, lineHeight: 1.5 }}>
+          Reported. Your admin has been told, and will sort it out.
+          Your attendance for today is still not recorded.
         </div>
       )}
     </div>
@@ -755,6 +835,8 @@ function EClaims({ profile }) {
 function ClaimForm({ caps, onClose, onDone }) {
   const T = useT();
   const api = useApi();
+  // One key for this form. Tapping Submit twice files one claim, not two.
+  const actionKey = useRef(newActionKey());
   const [category, setCategory] = useState('Travel');
   const [amount, setAmount] = useState('');
   const [place, setPlace] = useState('');
@@ -778,7 +860,7 @@ function ClaimForm({ caps, onClose, onDone }) {
         ...(category === 'Travel' ? { place: place.trim() } : {}),
         ...(category === 'Stay' ? { location: location.trim() } : {}),
         ...(category === 'Others' ? { note: note.trim() } : {}),
-      });
+      }, actionKey.current);
       onDone();
     } catch (e) {
       setProblem(e);
@@ -851,7 +933,7 @@ function ClaimForm({ caps, onClose, onDone }) {
   );
 }
 
-function EProfile({ profile, onOut, theme, setTheme }) {
+function EProfile({ profile, onOut, theme, setTheme, onOpenNews }) {
   const T = useT();
   const api = useApi();
   const [busy, setBusy] = useState(false);
@@ -893,6 +975,9 @@ function EProfile({ profile, onOut, theme, setTheme }) {
         Your location is read only when you check in or check out. It is never tracked in between,
         saved records cannot be edited, and coordinates are deleted after 90 days.
       </p>
+      <div style={{ marginBottom: 12 }}>
+        <Btn variant="line" full onClick={onOpenNews}>Announcements</Btn>
+      </div>
       <Btn variant="line" full busy={busy} onClick={signOut}>Sign out</Btn>
       <div style={{ height: 40 }} />
     </div>
@@ -904,8 +989,66 @@ function EProfile({ profile, onOut, theme, setTheme }) {
 function Admin({ me, onOut, theme, setTheme }) {
   const T = useT();
   const api = useApi();
+  const isPhone = useIsPhone();
   const [page, setPage] = useState('dashboard');
-  const nav = [['dashboard', 'Dashboard'], ['words', 'Words'], ['claims', 'Claims'], ['employees', 'Employees'], ['audit', 'Audit']];
+  const nav = [['dashboard', 'Today'], ['news', 'Notices'], ['words', 'Words'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit']];
+
+  const body = (
+    <main key={page} className="rise" style={{
+      flex: 1, minWidth: 0,
+      padding: isPhone ? '24px 20px 92px' : '48px 48px',
+      maxWidth: isPhone ? '100%' : 1100,
+    }}>
+      {page === 'dashboard' && <ADash isPhone={isPhone} />}
+      {page === 'news' && <ANews isPhone={isPhone} />}
+      {page === 'words' && <AWords isPhone={isPhone} />}
+      {page === 'claims' && <AClaims isPhone={isPhone} />}
+      {page === 'employees' && <AEmployees isPhone={isPhone} />}
+      {page === 'audit' && <AAudit />}
+    </main>
+  );
+
+  // On a phone the sidebar becomes bottom navigation, the same pattern the
+  // employee app uses. A fixed 210px rail beside wide tables is what made
+  // the page scroll sideways.
+  if (isPhone) {
+    return (
+      <div style={{ minHeight: '100vh', maxWidth: '100%', overflowX: 'hidden' }}>
+        <header style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '14px 20px', borderBottom: `1px solid ${T.line}`,
+          position: 'sticky', top: 0, background: T.bg, zIndex: 20,
+        }}>
+          <Brand size={22} showName={false} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <ThemeToggle theme={theme} setTheme={setTheme} />
+            <button className="press" onClick={async () => { try { await api.logout(); } finally { onOut(); } }}
+              style={{ background: 'none', border: 'none', color: T.mute, fontSize: 12, cursor: 'pointer', padding: 8 }}>
+              Sign out
+            </button>
+          </div>
+        </header>
+
+        {body}
+
+        <nav style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex',
+          background: T.bg, borderTop: `1px solid ${T.line}`, zIndex: 20,
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}>
+          {nav.map(([k, label]) => (
+            <button key={k} className="press" onClick={() => setPage(k)} style={{
+              flex: 1, padding: '14px 0', background: 'none', border: 'none', cursor: 'pointer',
+              color: page === k ? T.text : T.faint, fontSize: 12, position: 'relative',
+            }}>
+              {page === k && <span style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 18, height: 1.5, background: T.accent }} />}
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -924,19 +1067,12 @@ function Admin({ me, onOut, theme, setTheme }) {
             style={{ background: 'none', border: 'none', color: T.mute, fontSize: 12, cursor: 'pointer', padding: 8 }}>Sign out</button>
         </div>
       </aside>
-
-      <main key={page} className="rise" style={{ flex: 1, padding: '48px 48px', maxWidth: 1100 }}>
-        {page === 'dashboard' && <ADash />}
-        {page === 'words' && <AWords />}
-        {page === 'claims' && <AClaims />}
-        {page === 'employees' && <AEmployees />}
-        {page === 'audit' && <AAudit />}
-      </main>
+      {body}
     </div>
   );
 }
 
-function ADash() {
+function ADash({ isPhone }) {
   const T = useT();
   const api = useApi();
   const dash = useResource(() => api.admin.dashboard(), []);
@@ -952,14 +1088,18 @@ function ADash() {
       <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Today</h1>
       <M style={{ fontSize: 11, color: T.mute, display: 'block', marginTop: 10, marginBottom: 40 }}>{istDateLong(businessDate)}</M>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 32, marginBottom: 48 }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(auto-fit,minmax(160px,1fr))',
+        gap: isPhone ? 24 : 32, marginBottom: isPhone ? 36 : 48,
+      }}>
         {[['Present', `${present} / ${board.length}`, false],
           ['Completed', `${work.completed} / ${work.assigned}`, false],
           ['Overdue', work.overdue, Number(work.overdue) > 0],
           ['To review', work.submitted, false]].map(([label, value, alert]) => (
           <div key={label}>
             <div className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em', color: T.faint, marginBottom: 12 }}>{label}</div>
-            <div className="tight" style={{ fontSize: 40, fontWeight: 600, lineHeight: 1, color: alert ? T.accent : T.text }}>{value}</div>
+            <div className="tight" style={{ fontSize: isPhone ? 30 : 40, fontWeight: 600, lineHeight: 1, color: alert ? T.accent : T.text }}>{value}</div>
           </div>
         ))}
       </div>
@@ -967,18 +1107,18 @@ function ADash() {
       <Eyebrow>Team</Eyebrow>
       <div style={{ borderTop: `1px solid ${T.line}` }}>
         {board.map((b) => (
-          <div key={b.employee_id} className="row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 500 }}>{b.name}</div>
-              <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{b.role}</div>
+          <div key={b.employee_id} className="row" style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 500 }}>{b.name}</div>
+                <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{b.role}</div>
+              </div>
+              <Status state={b.attendance_status} />
             </div>
-            <Status state={b.attendance_status} />
-            <M style={{ fontSize: 12, color: T.mute, width: 90, textAlign: 'right' }}>
-              {b.completed}/{b.tasks_assigned} done
-            </M>
-            <M style={{ fontSize: 12, color: Number(b.overdue) ? T.accent : T.faint, width: 70, textAlign: 'right' }}>
-              {Number(b.overdue) ? `${b.overdue} overdue` : ''}
-            </M>
+            <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+              <M style={{ fontSize: 12, color: T.mute }}>{b.completed}/{b.tasks_assigned} done</M>
+              {Number(b.overdue) > 0 && <M style={{ fontSize: 12, color: T.accent }}>{b.overdue} overdue</M>}
+            </div>
           </div>
         ))}
       </div>
@@ -986,14 +1126,21 @@ function ADash() {
   );
 }
 
-function AWords() {
+function ANews({ isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const list = useResource(() => api.admin.broadcasts(), []);
+  return <AdminBroadcasts T={T} api={api} list={list} isPhone={isPhone} />;
+}
+
+function AWords({ isPhone }) {
   const T = useT();
   const api = useApi();
   const results = useResource(() => api.admin.latResults(), []);
-  return <AdminLat T={T} api={api} results={results} onPublished={results.reload} />;
+  return <AdminLat T={T} api={api} results={results} onPublished={results.reload} isPhone={isPhone} />;
 }
 
-function AClaims() {
+function AClaims({ isPhone }) {
   const T = useT();
   const api = useApi();
   const [status, setStatus] = useState('Pending');
@@ -1002,7 +1149,7 @@ function AClaims() {
 
   const decide = async (id, decision, reason) => {
     setActing(id);
-    try { await api.admin.decideClaim(id, { decision, ...(reason ? { reason } : {}) }); await claims.reload(); }
+    try { await api.admin.decideClaim(id, { decision, ...(reason ? { reason } : {}) }, newActionKey()); await claims.reload(); }
     catch (e) { alert(e.message); }
     finally { setActing(null); }
   };
@@ -1024,7 +1171,7 @@ function AClaims() {
         : claims.error ? <ErrorBlock error={claims.error} onRetry={claims.reload} />
           : !claims.data.length ? <Blank title={`No ${status.toLowerCase()} claims`} />
             : claims.data.map((c) => (
-              <div key={c.claim_id} style={{ display: 'flex', gap: 20, alignItems: 'flex-start', padding: '20px 0', borderBottom: `1px solid ${T.line}` }}>
+              <div key={c.claim_id} style={{ display: 'flex', gap: isPhone ? 12 : 20, alignItems: 'flex-start', flexWrap: 'wrap', padding: '20px 0', borderBottom: `1px solid ${T.line}` }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{c.employee_name} · {c.category}</div>
                   <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 4 }}>{istDateShort(c.claim_date)}</M>
@@ -1044,7 +1191,7 @@ function AClaims() {
   );
 }
 
-function AEmployees() {
+function AEmployees({ isPhone }) {
   const T = useT();
   const api = useApi();
   const staff = useResource(() => api.admin.employees(), []);
@@ -1055,16 +1202,20 @@ function AEmployees() {
         : staff.error ? <ErrorBlock error={staff.error} onRetry={staff.reload} />
           : <div style={{ borderTop: `1px solid ${T.line}` }}>
             {staff.data.map((e) => (
-              <div key={e.employee_id} className="row" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{e.name}</div>
-                  <M style={{ fontSize: 11, color: T.faint }}>{e.employee_code} · {e.email}</M>
+              <div key={e.employee_id} className="row" style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{e.name}</div>
+                    <M style={{ fontSize: 11, color: T.faint, wordBreak: 'break-all' }}>{e.employee_code} · {e.email}</M>
+                  </div>
+                  <Status state={e.status === 'Active' ? 'Completed' : 'Absent'} />
                 </div>
-                <div style={{ fontSize: 13, color: T.mute, width: 120 }}>{e.role}</div>
-                <M style={{ fontSize: 12, color: e.claims_enabled ? T.text : T.faint, width: 150 }}>
-                  {e.claims_enabled ? `₹${e.cap_food} / ₹${e.cap_stay}` : 'no reimbursement'}
-                </M>
-                <Status state={e.status === 'Active' ? 'Completed' : 'Absent'} />
+                <div style={{ display: 'flex', gap: 16, marginTop: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: T.mute }}>{e.role}</span>
+                  <M style={{ fontSize: 12, color: e.claims_enabled ? T.text : T.faint }}>
+                    {e.claims_enabled ? `₹${e.cap_food} / ₹${e.cap_stay}` : 'no reimbursement'}
+                  </M>
+                </div>
               </div>
             ))}
           </div>}

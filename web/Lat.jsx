@@ -247,7 +247,7 @@ function LatResult({ T, data, onBack }) {
 
 /* ─────────────────────────────────────────────────────────── admin side */
 
-export function AdminLat({ T, api, results, onPublished }) {
+export function AdminLat({ T, api, results, onPublished, isPhone }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
@@ -278,7 +278,7 @@ export function AdminLat({ T, api, results, onPublished }) {
     <>
       <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 32px' }}>Words</h1>
 
-      <div style={{ display: 'grid', gap: 40, gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))' }}>
+      <div style={{ display: 'grid', gap: isPhone ? 32 : 40, gridTemplateColumns: isPhone ? '1fr' : 'repeat(auto-fit,minmax(320px,1fr))' }}>
         <div>
           <Eyebrow T={T}>Publish today</Eyebrow>
           <textarea

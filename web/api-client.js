@@ -15,13 +15,20 @@ export class ApiError extends Error {
   get isValidation() { return this.status === 422; }
 }
 
+/** A key for one user action, stable across retries of that same action. */
+export const newActionKey = () =>
+  (crypto.randomUUID ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(36).slice(2)}`);
+
 export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
   let token = null;
   let employee = null;
 
-  async function request(path, { method = 'GET', body, isForm } = {}) {
+  async function request(path, { method = 'GET', body, isForm, idempotencyKey } = {}) {
     const headers = {};
     if (token) headers.Authorization = `Bearer ${token}`;
+    // Sent once per user action. If the response is lost and the request is
+    // retried, the server returns the original result instead of acting twice.
+    if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
     let payload;
     if (isForm) payload = body;
     else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
@@ -40,7 +47,11 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     try { data = text ? JSON.parse(text) : null; } catch { data = null; }
 
     if (!res.ok) {
-      if (res.status === 401) { token = null; employee = null; onUnauthenticated?.(data?.error); }
+      if (res.status === 401) {
+        token = null; employee = null;
+        try { localStorage?.clear?.(); sessionStorage?.clear?.(); } catch { /* best effort */ }
+        onUnauthenticated?.(data?.error);
+      }
       throw new ApiError(res.status, data?.error || 'error',
         data?.message || 'Something went wrong.', data?.details, data?.requestId);
     }
@@ -57,22 +68,40 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       return employee;
     },
     async logout() {
-      try { await request('/auth/logout', { method: 'POST' }); } finally { token = null; employee = null; }
+      try {
+        await request('/auth/logout', { method: 'POST' });
+      } finally {
+        token = null;
+        employee = null;
+        // On a shared phone the next person must not find anything of the
+        // last one. API responses were never cached; this clears the shell
+        // cache and any storage a future change might introduce.
+        try {
+          if (typeof caches !== 'undefined') {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+          }
+          localStorage?.clear?.();
+          sessionStorage?.clear?.();
+        } catch { /* clearing is best effort; the session is already gone */ }
+      }
     },
     me: () => request('/me'),
 
     sites: () => request('/attendance/sites'),
-    checkIn: (fix) => request('/attendance/check-in', { method: 'POST', body: fix }),
-    checkOut: (fix) => request('/attendance/check-out', { method: 'POST', body: fix }),
+    checkIn: (fix, key) => request('/attendance/check-in', { method: 'POST', body: fix, idempotencyKey: key }),
+    checkOut: (fix, key) => request('/attendance/check-out', { method: 'POST', body: fix, idempotencyKey: key }),
+    reportIncident: (body, key) => request('/attendance/incidents', { method: 'POST', body, idempotencyKey: key }),
+    myIncidents: () => request('/attendance/incidents/me'),
     myAttendance: (month) => request(`/attendance/me${month ? `?month=${month}` : ''}`),
 
     myTasks: (view) => request(`/tasks/me${view ? `?view=${view}` : ''}`),
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
-    submitTask: (id, body) => request(`/tasks/${id}/submit`, { method: 'POST', body }),
+    submitTask: (id, body, key) => request(`/tasks/${id}/submit`, { method: 'POST', body, idempotencyKey: key }),
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
-    createClaim: (body) => request('/claims', { method: 'POST', body }),
+    createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),
 
     async uploadFile(file) {
       const form = new FormData();
@@ -82,6 +111,9 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     fileLink: (id) => request(`/files/${id}/link`),
 
     notifications: () => request('/notifications'),
+
+    broadcasts: () => request('/broadcasts'),
+    markBroadcastRead: (id) => request(`/broadcasts/${id}/read`, { method: 'POST' }),
 
     latToday: () => request('/lat/today'),
     latStart: () => request('/lat/attempts', { method: 'POST' }),
@@ -94,10 +126,14 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       createEmployee: (body) => request('/admin/employees', { method: 'POST', body }),
       createTask: (body) => request('/tasks', { method: 'POST', body }),
       claims: (status) => request(`/admin/claims${status ? `?status=${status}` : ''}`),
-      decideClaim: (id, body) => request(`/admin/claims/${id}/decide`, { method: 'POST', body }),
-      approve: (id) => request(`/admin/submissions/${id}/approve`, { method: 'POST' }),
-      returnWork: (id, reason) => request(`/admin/submissions/${id}/return`, { method: 'POST', body: { reason } }),
+      decideClaim: (id, body, key) => request(`/admin/claims/${id}/decide`, { method: 'POST', body, idempotencyKey: key }),
+      incidents: (state) => request(`/admin/incidents${state ? `?state=${state}` : ''}`),
+      resolveIncident: (id, body, key) => request(`/admin/incidents/${id}/resolve`, { method: 'POST', body, idempotencyKey: key }),
+      approve: (id, key) => request(`/admin/submissions/${id}/approve`, { method: 'POST', idempotencyKey: key }),
+      returnWork: (id, reason, key) => request(`/admin/submissions/${id}/return`, { method: 'POST', body: { reason }, idempotencyKey: key }),
       audit: () => request('/admin/audit'),
+      broadcasts: () => request('/admin/broadcasts'),
+      publishBroadcast: (body, key) => request('/admin/broadcasts', { method: 'POST', body, idempotencyKey: key }),
       publishWords: (words, date) => request('/admin/lat/sets', { method: 'POST', body: { words, ...(date ? { date } : {}) } }),
       latResults: (date) => request(`/admin/lat/results${date ? `?date=${date}` : ''}`),
     },

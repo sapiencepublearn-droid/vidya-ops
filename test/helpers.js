@@ -15,9 +15,14 @@ export const db = new pg.Pool({
 
 let server, base;
 
-export async function boot() {
+export async function boot(opts) {
   if (server) return base;
-  const app = createApp();
+  // Functional tests run with generous limits so they are not fighting the
+  // rate limiter; the limiter itself is tested on its own app instance.
+  const app = createApp(opts ?? { limits: {
+    global: 100000, reset: 100000, resetSubmit: 100000,
+    upload: 100000, claims: 100000, lat: 100000, broadcast: 100000,
+  } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
   return base;
@@ -28,9 +33,10 @@ export async function shutdown() {
   await db.end().catch(() => {});
 }
 
-export async function api(path, { method = 'GET', token, body, raw } = {}) {
-  const headers = {};
+export async function api(path, { method = 'GET', token, body, raw, idempotencyKey, headers: extra } = {}) {
+  const headers = { ...(extra || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
   let payload = body;
   if (body && !raw) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
   const res = await fetch(`${base}${path}`, { method, headers, body: payload });
@@ -78,6 +84,26 @@ export async function tokenFor(email, password = 'correct-horse-battery') {
 }
 
 /** Multipart body without a dependency. */
+/** A second app with its own limits, for testing the limiter itself. */
+export async function bootWithLimits(limits) {
+  const app = createApp({ limits });
+  const srv = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  return {
+    url,
+    call: async (path, init = {}) => {
+      const res = await fetch(url + path, {
+        ...init,
+        headers: { 'Content-Type': 'application/json', ...(init.headers || {}) },
+      });
+      return { status: res.status, body: await res.json().catch(() => null) };
+    },
+    close: () => new Promise((r) => srv.close(r)),
+  };
+}
+
 export function multipart(fieldName, filename, buffer) {
   const boundary = '----t' + Math.random().toString(16).slice(2);
   const head = Buffer.from(

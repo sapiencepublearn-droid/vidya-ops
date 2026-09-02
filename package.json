@@ -1,6 +1,6 @@
 {
   "name": "phase1",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -13,7 +13,8 @@
     "web:build": "vite build --config web/vite.config.js",
     "icons": "node scripts/make-icons.mjs",
     "build": "vite build --config web/vite.config.js",
-    "deploy:migrate": "node-pg-migrate up -m migrations"
+    "deploy:migrate": "node-pg-migrate up -m migrations",
+    "smoke": "node scripts/smoke.mjs"
   },
   "keywords": [],
   "author": "",

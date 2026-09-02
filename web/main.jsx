@@ -9,8 +9,11 @@ createRoot(document.getElementById('root')).render(
 // Registers the service worker, which is what lets the app install to a
 // phone home screen. Failure here is not fatal: the app still works as a
 // normal website.
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
+if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    // localhost counts as a secure context, so this works in development too.
+    navigator.serviceWorker.register('/sw.js').catch((e) => {
+      console.warn('service worker did not register:', e.message);
+    });
   });
 }

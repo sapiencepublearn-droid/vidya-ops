@@ -5,9 +5,11 @@ import {
   config, pool, tx, ApiError, badRequest, forbidden, notFound, conflict,
   unprocessable, wrap, uuidParam, metresBetween, logger,
 } from './core.js';
-import { login, revoke, authenticate, adminOnly, hashPassword, assertPasswordPolicy } from './auth.js';
+import { login, revoke, authenticate, adminOnly, hashPassword, assertPasswordPolicy,
+  requestPasswordReset, completePasswordReset } from './auth.js';
 import { putObject, getObject, sniff, safeName, storageKey, sha256, signDownload, verifyDownload } from './storage.js';
 import { lat } from './lat.js';
+import { idempotent, notify, notifyAdmins, notifyEveryone } from './reliability.js';
 
 export const router = Router();
 
@@ -83,9 +85,41 @@ router.post('/auth/login', wrap(async (req, res) => {
   res.json({ token: out.token, employee: out.employee });
 }));
 
+/**
+ * Always the same answer, whether or not the account exists.
+ *
+ * There is no mail service in this system and adding one is not justified
+ * for a team of this size, so the link is delivered by the admin. In
+ * development the token is returned to make the flow testable; in
+ * production it is only written to the server log for the admin to pass on.
+ */
+router.post('/auth/forgot-password', wrap(async (req, res) => {
+  const { email } = req.body ?? {};
+  const out = await requestPasswordReset(email, req.ip);
+  const body = {
+    message: 'If that email belongs to an active account, a reset link has been created. Ask your admin for it.',
+    requestId: req.id,
+  };
+  if (out.issued && !config.isProd) body.token = out.token;
+  res.json(body);
+}));
+
+router.post('/auth/reset-password', wrap(async (req, res) => {
+  const { token, password } = req.body ?? {};
+  await completePasswordReset(token, password, req.id);
+  res.json({ message: 'Your password has been changed. Sign in with it.', requestId: req.id });
+}));
+
 /* ──────────────────────────────────────────── everything below is auth */
 
 router.use(authenticate);
+
+// The authoritative request id travels with the actor so audit rows can be
+// traced back to the exact request a user reported.
+router.use((req, _res, next) => {
+  if (req.user) req.user.reqId = req.id;
+  next();
+});
 
 // LAT lives in its own module; everything past this point is authenticated.
 router.use(lat);
@@ -150,7 +184,7 @@ router.get('/attendance/sites', wrap(async (req, res) => {
   res.json(await permittedSites(req.user.id));
 }));
 
-router.post('/attendance/check-in', wrap(async (req, res) => {
+router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
   const sites = await permittedSites(req.user.id);
   const { site, distance } = verifyFix(sites, fix);
@@ -183,17 +217,16 @@ router.post('/attendance/check-in', wrap(async (req, res) => {
 
     if (late) {
       const name = (await c.query(`SELECT name FROM employees WHERE employee_id=$1`, [req.user.id])).rows[0].name;
-      await c.query(`INSERT INTO notifications (recipient_id, kind, body) VALUES (NULL,'attendance',$1)`,
-        [`${name} checked in late.`]);
+      await notifyAdmins(c, { kind: 'attendance', body: `${name} checked in late.`, reqId: req.id });
     }
     return ins.rows[0];
   });
 
   if (!result) throw conflict('You have already checked in today.', 'already_checked_in');
   res.status(201).json({ attendance: result, site: site.name, distanceMetres: distance });
-}));
+})));
 
-router.post('/attendance/check-out', wrap(async (req, res) => {
+router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
   const sites = await permittedSites(req.user.id);
   const { site, distance } = verifyFix(sites, fix);
@@ -212,7 +245,7 @@ router.post('/attendance/check-out', wrap(async (req, res) => {
       [cur.attendance_id, fix.latitude, fix.longitude, fix.accuracy, site.id, distance, fix.device ?? {}])).rows[0];
   });
   res.json({ attendance: row, site: site.name, distanceMetres: distance });
-}));
+})));
 
 router.get('/attendance/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
@@ -225,6 +258,170 @@ router.get('/attendance/me', wrap(async (req, res) => {
     [req.user.id, month, limit, offset]));
   res.json(rows);
 }));
+
+/* ────────────────────────────────────────────────────── broadcasts */
+
+/**
+ * The CEO tells the whole team something.
+ *
+ * The broadcast row is the durable record; the notification fan-out is a
+ * nudge on top. If the fan-out fails the announcement still exists and
+ * every employee can still read it, which is why it is not stored only as
+ * notifications.
+ */
+router.post('/admin/broadcasts', adminOnly, idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({
+    title: z.string().trim().min(1).max(140),
+    message: z.string().trim().min(1).max(4000),
+    priority: z.enum(['Normal', 'Important', 'Urgent']).default('Normal'),
+  }).strict(), req.body);
+
+  const out = await tx(req.user, async (c) => {
+    const b = (await c.query(
+      `INSERT INTO broadcasts (title, message, priority, created_by)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [f.title, f.message, f.priority, req.user.id])).rows[0];
+
+    // Savepoint-protected: a failure here is logged, never fatal to the
+    // broadcast itself.
+    await notifyEveryone(c, {
+      kind: 'broadcast',
+      body: f.priority === 'Normal' ? f.title : `${f.priority}: ${f.title}`,
+      reqId: req.id,
+    });
+    return b;
+  });
+  res.status(201).json(out);
+})));
+
+/** Everyone signed in sees every published broadcast. That is the point. */
+router.get('/broadcasts', wrap(async (req, res) => {
+  const { limit, offset } = page(req.query);
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT b.broadcast_id, b.title, b.message, b.priority, b.published_at,
+            e.name AS published_by,
+            (r.employee_id IS NOT NULL) AS read
+       FROM broadcasts b
+       JOIN employees e ON e.employee_id = b.created_by
+       LEFT JOIN broadcast_reads r
+              ON r.broadcast_id = b.broadcast_id AND r.employee_id = $1
+      ORDER BY b.published_at DESC LIMIT $2 OFFSET $3`,
+    [req.user.id, limit, offset]));
+  res.json(rows);
+}));
+
+router.post('/broadcasts/:id/read', uuidParam('id'), wrap(async (req, res) => {
+  await tx(req.user, (c) => c.query(
+    `INSERT INTO broadcast_reads (broadcast_id, employee_id) VALUES ($1,$2)
+     ON CONFLICT DO NOTHING`, [req.params.id, req.user.id]));
+  res.status(204).end();
+}));
+
+/** Admin view: what was sent, and how many people have opened it. */
+router.get('/admin/broadcasts', adminOnly, wrap(async (req, res) => {
+  const { limit, offset } = page(req.query);
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT b.*, e.name AS published_by,
+            (SELECT count(*)::int FROM broadcast_reads r WHERE r.broadcast_id = b.broadcast_id) AS read_count,
+            (SELECT count(*)::int FROM employees WHERE status = 'Active') AS audience
+       FROM broadcasts b JOIN employees e ON e.employee_id = b.created_by
+      ORDER BY b.published_at DESC LIMIT $1 OFFSET $2`, [limit, offset]));
+  res.json(rows);
+}));
+
+/* ─────────────────────────────────────────── attendance incidents */
+
+/**
+ * A sanctioned way to say "check-in genuinely failed".
+ *
+ * This never creates or edits an attendance record. The original evidence,
+ * or its absence, stands exactly as recorded. The admin reviews and writes
+ * down what they decided, which is auditable — unlike an override button,
+ * which would quietly destroy the meaning of every check-in in the system.
+ */
+router.post('/attendance/incidents', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({
+    kind: z.enum(['check_in', 'check_out']),
+    reason: z.enum(['permission_denied', 'gps_unavailable', 'poor_accuracy', 'outside_radius',
+      'mock_location', 'network_unavailable', 'server_unavailable', 'duplicate_check_in', 'other']),
+    note: z.string().trim().max(1000).optional(),
+    latitude: z.number().min(-90).max(90).optional(),
+    longitude: z.number().min(-180).max(180).optional(),
+    accuracy: z.number().positive().max(100000).optional(),
+    distanceMetres: z.number().int().min(0).optional(),
+  }).strict(), req.body);
+
+  const out = await tx(req.user, async (c) => {
+    const ins = await c.query(
+      `INSERT INTO attendance_incidents
+         (employee_id, kind, reason, note, reported_latitude, reported_longitude,
+          reported_accuracy, distance_m)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (employee_id, work_date, kind) WHERE state = 'Open' DO NOTHING
+       RETURNING *`,
+      [req.user.id, f.kind, f.reason, f.note ?? null,
+       f.latitude ?? null, f.longitude ?? null, f.accuracy ?? null, f.distanceMetres ?? null]);
+
+    // Repeated taps must not queue up duplicates for the admin.
+    if (!ins.rowCount) return null;
+
+    const name = (await c.query(`SELECT name FROM employees WHERE employee_id=$1`, [req.user.id])).rows[0].name;
+    await notifyAdmins(c, {
+      kind: 'incident',
+      body: `${name} could not ${f.kind === 'check_in' ? 'check in' : 'check out'}: ${f.reason.replace(/_/g, ' ')}.`,
+      reqId: req.id,
+    });
+    return ins.rows[0];
+  });
+
+  if (!out) throw conflict('You have already reported this today. Your admin has it.', 'incident_exists');
+  res.status(201).json(out);
+})));
+
+router.get('/attendance/incidents/me', wrap(async (req, res) => {
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT * FROM attendance_incidents WHERE employee_id=$1
+      ORDER BY created_at DESC LIMIT 30`, [req.user.id]));
+  res.json(rows);
+}));
+
+router.get('/admin/incidents', adminOnly, wrap(async (req, res) => {
+  const state = ['Open', 'Resolved', 'Dismissed'].includes(req.query.state) ? req.query.state : 'Open';
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT i.*, e.name AS employee_name, e.role
+       FROM attendance_incidents i JOIN employees e ON e.employee_id = i.employee_id
+      WHERE i.state = $1::incident_state
+      ORDER BY i.created_at DESC LIMIT 100`, [state]));
+  res.json(rows);
+}));
+
+router.post('/admin/incidents/:id/resolve', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({
+    decision: z.enum(['Resolved', 'Dismissed']),
+    resolution: z.string().trim().min(1).max(1000),
+  }).strict(), req.body);
+
+  const out = await tx(req.user, async (c) => {
+    const cur = (await c.query(
+      `SELECT incident_id, employee_id, state FROM attendance_incidents
+        WHERE incident_id=$1 FOR UPDATE`, [req.params.id])).rows[0];
+    if (!cur) throw notFound('That report does not exist.');
+    if (cur.state !== 'Open') throw conflict('That report was already handled.', 'already_handled');
+
+    const row = (await c.query(
+      `UPDATE attendance_incidents
+          SET state=$2, resolution=$3, resolved_by=$4, resolved_at=now()
+        WHERE incident_id=$1 RETURNING *`,
+      [cur.incident_id, f.decision, f.resolution, req.user.id])).rows[0];
+
+    await notify(c, {
+      recipientId: cur.employee_id, kind: 'incident_resolved',
+      body: `Your check-in report was reviewed: ${f.resolution}`, reqId: req.id,
+    });
+    return row;
+  }, { reason: f.resolution });
+  res.json(out);
+})));
 
 /* ────────────────────────────────────────────────────────────── tasks */
 
@@ -265,8 +462,8 @@ router.post('/tasks', adminOnly, wrap(async (req, res) => {
       `INSERT INTO tasks (title, description, assigned_to, assigned_by, priority, due_date, due_time)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
       [f.title, f.description ?? null, f.assignedTo, req.user.id, f.priority, f.dueDate, f.dueTime])).rows[0];
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body, task_id) VALUES ($1,'task_assigned',$2,$3)`,
-      [f.assignedTo, `New task ${t.task_code}: ${t.title}`, t.task_id]);
+    await notify(c, { recipientId: f.assignedTo, kind: 'task_assigned',
+      body: `New task ${t.task_code}: ${t.title}`, taskId: t.task_id, reqId: req.id });
     return t;
   });
   res.status(201).json(task);
@@ -295,7 +492,7 @@ router.post('/tasks/:id/start', uuidParam('id'), wrap(async (req, res) => {
   res.json(task);
 }));
 
-router.post('/tasks/:id/submit', uuidParam('id'), wrap(async (req, res) => {
+router.post('/tasks/:id/submit', uuidParam('id'), idempotent(wrap(async (req, res) => {
   const f = parse(z.object({
     description: z.string().trim().min(1).max(5000),
     remarks: z.string().max(2000).optional(),
@@ -329,14 +526,14 @@ router.post('/tasks/:id/submit', uuidParam('id'), wrap(async (req, res) => {
       }
     }
     await c.query(`UPDATE tasks SET status='Submitted', submitted_at=now() WHERE task_id=$1`, [t.task_id]);
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body, task_id) VALUES (NULL,'review',$1,$2)`,
-      [`${t.task_code} submitted for review.`, t.task_id]);
+    await notifyAdmins(c, { kind: 'review',
+      body: `${t.task_code} submitted for review.`, taskId: t.task_id, reqId: req.id });
     return s;
   });
   res.status(201).json(sub);
-}));
+})));
 
-router.post('/admin/submissions/:id/approve', uuidParam('id'), adminOnly, wrap(async (req, res) => {
+router.post('/admin/submissions/:id/approve', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
   const out = await tx(req.user, async (c) => {
     const s = (await c.query(
       `SELECT s.submission_id, s.task_id, s.employee_id, s.review_status, t.task_code
@@ -347,14 +544,14 @@ router.post('/admin/submissions/:id/approve', uuidParam('id'), adminOnly, wrap(a
     await c.query(`UPDATE work_submissions SET review_status='Approved', reviewed_by=$2, reviewed_at=now()
                     WHERE submission_id=$1`, [s.submission_id, req.user.id]);
     await c.query(`UPDATE tasks SET status='Completed', completed_at=now() WHERE task_id=$1`, [s.task_id]);
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body, task_id) VALUES ($1,'approved',$2,$3)`,
-      [s.employee_id, `Your work on ${s.task_code} was approved.`, s.task_id]);
+    await notify(c, { recipientId: s.employee_id, kind: 'approved',
+      body: `Your work on ${s.task_code} was approved.`, taskId: s.task_id, reqId: req.id });
     return { taskId: s.task_id, status: 'Completed' };
   });
   res.json(out);
-}));
+})));
 
-router.post('/admin/submissions/:id/return', uuidParam('id'), adminOnly, wrap(async (req, res) => {
+router.post('/admin/submissions/:id/return', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
   const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(2000) }).strict(), req.body);
   const out = await tx(req.user, async (c) => {
     const s = (await c.query(
@@ -367,18 +564,18 @@ router.post('/admin/submissions/:id/return', uuidParam('id'), adminOnly, wrap(as
                      reviewed_by=$3, reviewed_at=now() WHERE submission_id=$1`,
       [s.submission_id, reason, req.user.id]);
     await c.query(`UPDATE tasks SET status='Returned', submitted_at=NULL WHERE task_id=$1`, [s.task_id]);
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body, task_id) VALUES ($1,'returned',$2,$3)`,
-      [s.employee_id, `Work returned on ${s.task_code}: ${reason}`, s.task_id]);
+    await notify(c, { recipientId: s.employee_id, kind: 'returned',
+      body: `Work returned on ${s.task_code}: ${reason}`, taskId: s.task_id, reqId: req.id });
     return { taskId: s.task_id, status: 'Returned' };
-  });
+  }, { reason });
   res.json(out);
-}));
+})));
 
 /* ───────────────────────────────────────────────────────────── claims */
 
 const CAP_COLUMN = { Food: 'cap_food', Stay: 'cap_stay' };
 
-router.post('/claims', wrap(async (req, res) => {
+router.post('/claims', idempotent(wrap(async (req, res) => {
   const f = parse(claimSchema, req.body);
   const paise = Math.round(f.amount * 100);
 
@@ -430,12 +627,12 @@ router.post('/claims', wrap(async (req, res) => {
       [row.claim_id, f.attachmentId, req.user.id]);
     if (!upd.rowCount) throw forbidden('That bill is not yours or is already attached to another claim.');
 
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body) VALUES (NULL,'claim',$1)`,
-      [`A ${f.category.toLowerCase()} claim of ₹${f.amount} was submitted.`]);
+    await notifyAdmins(c, { kind: 'claim',
+      body: `A ${f.category.toLowerCase()} claim of ₹${f.amount} was submitted.`, reqId: req.id });
     return row;
   });
   res.status(201).json(claim);
-}));
+})));
 
 router.get('/claims/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
@@ -466,7 +663,7 @@ router.get('/admin/claims', adminOnly, wrap(async (req, res) => {
   res.json(rows);
 }));
 
-router.post('/admin/claims/:id/decide', uuidParam('id'), adminOnly, wrap(async (req, res) => {
+router.post('/admin/claims/:id/decide', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
   const f = parse(z.object({
     decision: z.enum(['Approved', 'Rejected']),
     reason: z.string().trim().max(2000).optional(),
@@ -483,13 +680,13 @@ router.post('/admin/claims/:id/decide', uuidParam('id'), adminOnly, wrap(async (
       `UPDATE claims SET status=$2, reject_reason=$3, reviewed_by=$4, reviewed_at=now()
         WHERE claim_id=$1 RETURNING *`,
       [cur.claim_id, f.decision, f.decision === 'Rejected' ? f.reason : null, req.user.id])).rows[0];
-    await c.query(`INSERT INTO notifications (recipient_id, kind, body) VALUES ($1,$2,$3)`,
-      [cur.employee_id, f.decision === 'Approved' ? 'approved' : 'returned',
-       `Your claim of ₹${cur.amount_paise / 100} was ${f.decision.toLowerCase()}.`]);
+    await notify(c, { recipientId: cur.employee_id,
+      kind: f.decision === 'Approved' ? 'approved' : 'returned',
+      body: `Your claim of ₹${cur.amount_paise / 100} was ${f.decision.toLowerCase()}.`, reqId: req.id });
     return row;
-  });
+  }, { reason: f.decision === 'Rejected' ? f.reason : `claim ${f.decision.toLowerCase()}` });
   res.json(out);
-}));
+})));
 
 /* ────────────────────────────────────────────────────────────── files */
 

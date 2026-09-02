@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { pool, tx, wrap, uuidParam, notFound, conflict, forbidden, unprocessable } from './core.js';
 import { adminOnly } from './auth.js';
+import { notifyEveryone } from './reliability.js';
 
 export const lat = Router();
 
@@ -195,10 +196,11 @@ lat.post('/admin/lat/sets', adminOnly, wrap(async (req, res) => {
         `INSERT INTO lat_words (set_id, position, word, meaning, example) VALUES ($1,$2,$3,$4,$5)`,
         [set.set_id, i + 1, w.word.trim(), w.meaning.trim(), w.example?.trim() ?? null]);
     }
-    await c.query(
-      `INSERT INTO notifications (recipient_id, kind, body)
-       SELECT employee_id, 'lat', $1 FROM employees WHERE status='Active'`,
-      [`Today's ${f.words.length} words are ready.`]);
+    // Savepoint-protected, same as everywhere else: publishing the words
+    // must not fail because announcing them did.
+    await notifyEveryone(c, {
+      kind: 'lat', body: `Today's ${f.words.length} words are ready.`, reqId: req.id,
+    });
     return { ...set, wordCount: f.words.length };
   });
   res.status(201).json(out);

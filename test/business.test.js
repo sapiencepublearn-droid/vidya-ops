@@ -348,6 +348,9 @@ test('illegal task transitions are refused', async () => {
 test('health endpoint reports database state', async () => {
   const r = await api('/health');
   assert.equal(r.status, 200);
-  assert.equal(r.body.db.ok, true);
-  assert.ok(r.body.db.businessDate);
+  // Shape changed in the hardening work: health now reports three states
+  // and names each check, rather than a single db flag.
+  assert.equal(r.body.status, 'healthy');
+  assert.equal(r.body.checks.database.ok, true);
+  assert.ok(r.body.checks.database.businessDate);
 });

@@ -2,26 +2,44 @@ import express from 'express';
 import helmet from 'helmet';
 import path from 'node:path';
 import fs from 'node:fs';
+import { readFileSync } from 'node:fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'node:crypto';
-import { config, logger, ApiError, dbHealth, pool } from './core.js';
+import { config, logger, ApiError, dbHealth, fullHealth, pool } from './core.js';
 import { router } from './routes.js';
 
-export function createApp() {
+// One source of truth. A hardcoded string here drifts from package.json
+// the first time either is bumped, and then /health reports a version that
+// does not match the code that is running.
+const pkg = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+export const APP_VERSION = process.env.APP_VERSION || `v${pkg.version}`;
+
+/**
+ * @param limits  Optional per-endpoint overrides. Production uses the
+ *   configured defaults; tests use this to exercise the limiter itself
+ *   without every other test fighting for the same budget.
+ */
+export function createApp({ limits: over = {} } = {}) {
   const app = express();
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 
-  // Correlation ID on every request and every log line it produces.
+  // The server generates the authoritative request id. A client-supplied
+  // X-Request-Id is recorded separately as a correlation hint only: letting
+  // it become req.id would allow a caller to forge or collide with the ids
+  // that appear in the audit trail.
   app.use((req, res, next) => {
-    req.id = req.headers['x-request-id'] || crypto.randomUUID();
+    req.id = crypto.randomUUID();
+    const hint = req.headers['x-request-id'];
+    req.clientHint = typeof hint === 'string' ? hint.slice(0, 100) : undefined;
     res.setHeader('X-Request-Id', req.id);
     const started = Date.now();
     res.on('finish', () => {
       logger.info({
-        reqId: req.id, method: req.method, path: req.path,
+        reqId: req.id, clientHint: req.clientHint, method: req.method, path: req.path,
         status: res.statusCode, ms: Date.now() - started,
         userId: req.user?.id,
       }, 'request');
@@ -46,21 +64,53 @@ export function createApp() {
 
   app.use(express.json({ limit: '256kb' }));
 
+  // 200 for healthy and degraded, 503 for down, so an uptime monitor
+  // alerts on real unavailability rather than on a slow query.
   app.get('/health', async (_req, res) => {
     try {
-      const db = await dbHealth();
-      res.json({ status: 'ok', db, uptimeSeconds: Math.round(process.uptime()), version: process.env.APP_VERSION || 'dev' });
+      const h = await fullHealth();
+      res.status(h.status === 'down' ? 503 : 200).json({
+        status: h.status,
+        checks: h.checks,
+        uptimeSeconds: Math.round(process.uptime()),
+        version: APP_VERSION,
+      });
     } catch (err) {
       logger.error({ err }, 'health check failed');
-      res.status(503).json({ status: 'degraded', db: { ok: false } });
+      res.status(503).json({ status: 'down', checks: {}, version: APP_VERSION });
     }
   });
 
-  app.use('/api', rateLimit({ windowMs: 60_000, max: 300, standardHeaders: true, legacyHeaders: false }));
+  // Limits are sized for ten to twenty people doing ordinary work, not for
+  // public traffic. Each is well above normal usage and only bites on abuse
+  // or a runaway client. Counted in memory: one process, no Redis needed.
+  const limit = (windowMs, max, message) => rateLimit({
+    windowMs, max, standardHeaders: true, legacyHeaders: false,
+    // Per employee once signed in, per IP before that, so one person on a
+    // shared office connection cannot lock out the rest of the team.
+    keyGenerator: (req) => req.user?.id || req.ip,
+    message: { error: 'rate_limited', message },
+  });
+
+  const L = {
+    global: 300, reset: config.resetRateMax, resetSubmit: 10,
+    upload: config.uploadRateMax, claims: 30, lat: 20, broadcast: 20, ...over,
+  };
+
+  app.use('/api', limit(60_000, L.global, 'Too many requests. Wait a moment and try again.'));
   app.use('/api/auth/login', rateLimit({
     windowMs: 15 * 60_000, max: config.loginRateMax, standardHeaders: true, legacyHeaders: false,
     message: { error: 'rate_limited', message: 'Too many attempts. Try again shortly.' },
   }));
+  app.use('/api/auth/forgot-password', limit(15 * 60_000, L.reset,
+    'Too many reset requests. Try again in a few minutes.'));
+  app.use('/api/auth/reset-password', limit(15 * 60_000, L.resetSubmit,
+    'Too many attempts. Request a new reset link.'));
+  app.use('/api/files', limit(60_000, L.upload,
+    'Too many uploads at once. Wait a moment and try again.'));
+  app.use('/api/claims', limit(60_000, L.claims, 'Too many claims at once. Wait a moment and try again.'));
+  app.use('/api/lat/attempts', limit(60_000, L.lat, 'Too many attempts. Wait a moment and try again.'));
+  app.use('/api/admin/broadcasts', limit(60_000, L.broadcast, 'Too many announcements at once.'));
 
   app.use('/api', router);
 
@@ -72,6 +122,10 @@ export function createApp() {
       // Hashed asset filenames can be cached hard; index.html must not be,
       // or a deploy leaves people on the previous version.
       setHeaders: (res, filePath) => {
+        // Chrome will not offer to install if the manifest has the wrong
+        // content type, and it will not re-read a cached service worker.
+        if (filePath.endsWith('.webmanifest')) res.setHeader('Content-Type', 'application/manifest+json');
+        if (filePath.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
         if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
         else if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       },
