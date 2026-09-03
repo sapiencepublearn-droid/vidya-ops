@@ -151,12 +151,16 @@ async function permittedSites(actor) {
   const { rows } = await tx(actor, (c) => c.query(
     `SELECT l.location_id, l.kind, l.name, l.zone, l.latitude, l.longitude, l.radius_metres
        FROM locations l JOIN employees e ON e.office_location_id = l.location_id
-      WHERE e.employee_id = $1 AND l.is_active
+      WHERE e.employee_id = $1 AND l.is_active AND l.latitude IS NOT NULL
       UNION
      SELECT l.location_id, l.kind, l.name, l.zone, l.latitude, l.longitude, l.radius_metres
        FROM trainer_assignments ta JOIN locations l ON l.location_id = ta.location_id
       WHERE ta.employee_id = $1 AND l.is_active AND ta.valid_from <= ist_today()
-        AND (ta.valid_to IS NULL OR ta.valid_to >= ist_today())`, [actor.id]));
+        AND (ta.valid_to IS NULL OR ta.valid_to >= ist_today())
+        -- A school with no confirmed position cannot be matched: there is
+        -- nothing to measure against. The punch is refused and the employee
+        -- reports it, rather than being accepted on an unverified guess.
+        AND l.latitude IS NOT NULL`, [actor.id]));
   return rows.map((r) => ({
     id: r.location_id, kind: r.kind, name: r.name, zone: r.zone,
     lat: Number(r.latitude), lng: Number(r.longitude), radius: r.radius_metres,
@@ -372,22 +376,39 @@ router.get('/admin/attendance', adminOnly, wrap(async (req, res) => {
 
 /* ───────────────────────────────────────────────────── school directory */
 
-const schoolSchema = z.object({
+// Base shape, kept unrefined so the edit endpoint can call .partial() on
+// it. Zod refuses .partial() on a schema carrying refinements.
+const schoolFields = z.object({
   name: z.string().trim().min(1).max(120),
   zone: z.string().trim().min(1).max(80),
   address: z.string().trim().max(400).optional(),
-  latitude: z.number().min(-90).max(90),
-  longitude: z.number().min(-180).max(180),
+  contactPerson: z.string().trim().max(120).optional(),
+  contactDesignation: z.string().trim().max(120).optional(),
+  contactPhone: z.string().trim().max(30).optional(),
+  // Optional: a school is usually known long before anyone has stood at
+  // the gate to record its position.
+  latitude: z.number().min(-90).max(90).nullable().optional(),
+  longitude: z.number().min(-180).max(180).nullable().optional(),
   radiusMetres: z.number().int().min(20).max(2000).default(100),
   isActive: z.boolean().default(true),
 }).strict();
+
+// Half a coordinate would look set and match nothing, so it is both or
+// neither. Applied to create and edit alike.
+const bothOrNeither = (v) =>
+  (v.latitude === undefined || v.latitude === null) === (v.longitude === undefined || v.longitude === null);
+const coordMessage = { message: 'Give both latitude and longitude, or neither.', path: ['latitude'] };
+
+const schoolSchema = schoolFields.refine(bothOrNeither, coordMessage);
+const schoolPatchSchema = schoolFields.partial().refine(bothOrNeither, coordMessage);
 
 /** Employees may read the directory; only admins may change it. */
 router.get('/schools', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
   const q = (req.query.q || '').trim();
   const { rows } = await pool.query(
-    `SELECT location_id, name, zone, address, latitude, longitude, radius_metres, is_active
+    `SELECT location_id, name, zone, address, contact_person, contact_designation, contact_phone,
+            latitude, longitude, radius_metres, is_active
        FROM locations
       WHERE kind = 'school'
         AND ($1::boolean IS NULL OR is_active = $1)
@@ -399,7 +420,8 @@ router.get('/schools', wrap(async (req, res) => {
 
 router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT location_id, name, zone, address, latitude, longitude, radius_metres, is_active, created_at, updated_at
+    `SELECT location_id, name, zone, address, contact_person, contact_designation, contact_phone,
+            latitude, longitude, radius_metres, is_active, location_set_at, created_at, updated_at
        FROM locations WHERE location_id = $1 AND kind = 'school'`, [req.params.id]);
   if (!rows[0]) throw notFound('That school does not exist.');
 
@@ -426,10 +448,14 @@ router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
   const f = parse(schoolSchema, req.body);
   const out = await tx(req.user, async (c) => {
     try {
+      const hasCoords = f.latitude !== undefined && f.latitude !== null;
       return (await c.query(
-        `INSERT INTO locations (kind, name, zone, address, latitude, longitude, radius_metres, is_active)
-         VALUES ('school',$1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-        [f.name, f.zone, f.address ?? null, f.latitude, f.longitude, f.radiusMetres, f.isActive])).rows[0];
+        `INSERT INTO locations (kind, name, zone, address, contact_person, contact_designation,
+            contact_phone, latitude, longitude, radius_metres, is_active, location_set_by, location_set_at)
+         VALUES ('school',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        [f.name, f.zone, f.address ?? null, f.contactPerson ?? null, f.contactDesignation ?? null,
+         f.contactPhone ?? null, f.latitude ?? null, f.longitude ?? null, f.radiusMetres, f.isActive,
+         hasCoords ? req.user.id : null, hasCoords ? new Date() : null])).rows[0];
     } catch (e) {
       if (e.code === '23505') throw conflict('A school with that name already exists.', 'school_exists');
       throw e;
@@ -439,7 +465,7 @@ router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
 })));
 
 router.patch('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
-  const f = parse(schoolSchema.partial().strict(), req.body);
+  const f = parse(schoolPatchSchema, req.body);
   if (!Object.keys(f).length) throw badRequest('Nothing to change.');
 
   const out = await tx(req.user, async (c) => {
@@ -447,18 +473,80 @@ router.patch('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(a
       `SELECT * FROM locations WHERE location_id=$1 AND kind='school' FOR UPDATE`, [req.params.id])).rows[0];
     if (!cur) throw notFound('That school does not exist.');
     // Deactivating never deletes: historical attendance still points here.
+    // Setting a position for the first time is recorded against the admin
+    // who did it, so a coordinate is always traceable to a person.
+    const settingCoords = f.latitude !== undefined && f.latitude !== null && cur.latitude === null;
     return (await c.query(
-      `UPDATE locations SET name=$2, zone=$3, address=$4, latitude=$5, longitude=$6,
-              radius_metres=$7, is_active=$8
+      `UPDATE locations SET name=$2, zone=$3, address=$4, contact_person=$5,
+              contact_designation=$6, contact_phone=$7, latitude=$8, longitude=$9,
+              radius_metres=$10, is_active=$11,
+              location_set_by = COALESCE($12, location_set_by),
+              location_set_at = COALESCE($13, location_set_at)
         WHERE location_id=$1 RETURNING *`,
       [req.params.id,
-       f.name ?? cur.name, f.zone ?? cur.zone, f.address ?? cur.address,
-       f.latitude ?? cur.latitude, f.longitude ?? cur.longitude,
+       f.name ?? cur.name, f.zone ?? cur.zone,
+       f.address === undefined ? cur.address : f.address,
+       f.contactPerson === undefined ? cur.contact_person : f.contactPerson,
+       f.contactDesignation === undefined ? cur.contact_designation : f.contactDesignation,
+       f.contactPhone === undefined ? cur.contact_phone : f.contactPhone,
+       f.latitude === undefined ? cur.latitude : f.latitude,
+       f.longitude === undefined ? cur.longitude : f.longitude,
        f.radiusMetres ?? cur.radius_metres,
-       f.isActive === undefined ? cur.is_active : f.isActive])).rows[0];
+       f.isActive === undefined ? cur.is_active : f.isActive,
+       settingCoords ? req.user.id : null, settingCoords ? new Date() : null])).rows[0];
   }, { reason: f.isActive === false ? 'school deactivated' : 'school updated' });
   res.json(out);
 })));
+
+/**
+ * Adopts a position recorded during a failed punch as the school's
+ * permanent location.
+ *
+ * This exists because a trainer standing at the gate is the person best
+ * placed to say where the gate is. But their reading is evidence, not
+ * authority: it becomes the school's coordinate only when an admin looks
+ * at it and says yes. `confirm: true` is required, the decision is
+ * audited, and the accepting admin is recorded on the row.
+ *
+ * The attendance or incident record is never altered by this.
+ */
+router.post('/admin/schools/:id/location-from-incident', uuidParam('id'), adminOnly,
+  idempotent(wrap(async (req, res) => {
+    const f = parse(z.object({
+      incidentId: uuid,
+      confirm: z.literal(true, {
+        errorMap: () => ({ message: 'Confirm that this position is correct for the school.' }),
+      }),
+      radiusMetres: z.number().int().min(20).max(2000).optional(),
+    }).strict(), req.body);
+
+    const out = await tx(req.user, async (c) => {
+      const school = (await c.query(
+        `SELECT location_id, name, latitude FROM locations
+          WHERE location_id=$1 AND kind='school' FOR UPDATE`, [req.params.id])).rows[0];
+      if (!school) throw notFound('That school does not exist.');
+
+      const inc = (await c.query(
+        `SELECT incident_id, reported_latitude, reported_longitude, reported_accuracy
+           FROM attendance_incidents WHERE incident_id=$1`, [f.incidentId])).rows[0];
+      if (!inc) throw notFound('That report does not exist.');
+      if (inc.reported_latitude === null || inc.reported_longitude === null) {
+        throw unprocessable('That report has no recorded position.', 'no_position');
+      }
+
+      const updated = (await c.query(
+        `UPDATE locations SET latitude=$2, longitude=$3,
+                radius_metres = COALESCE($4, radius_metres),
+                location_set_by=$5, location_set_at=now()
+          WHERE location_id=$1 RETURNING *`,
+        [school.location_id, inc.reported_latitude, inc.reported_longitude,
+         f.radiusMetres ?? null, req.user.id])).rows[0];
+
+      return { ...updated, previouslyUnset: school.latitude === null };
+    }, { reason: `school location confirmed from report ${f.incidentId}` });
+
+    res.json(out);
+  })));
 
 /** Who may punch in where. Kept explicit because it is a security rule. */
 router.post('/admin/schools/:id/assign', uuidParam('id'), adminOnly, wrap(async (req, res) => {

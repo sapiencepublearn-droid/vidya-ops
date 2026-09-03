@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { newActionKey } from './api-client.js';
+import { SchoolMap, EvidenceMap, directionsUrl } from './SchoolMap.jsx';
 
 /**
  * Schools — the places trainers visit.
@@ -22,6 +23,7 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
   const [active, setActive] = useState('active');
   const [editing, setEditing] = useState(null);   // school object, or 'new'
   const [open, setOpen] = useState(null);         // school id for detail
+  const [mapOpen, setMapOpen] = useState(false);
 
   const schools = useResource(() => api.schools(), []);
   const list = schools.data || [];
@@ -57,7 +59,10 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 24 }}>
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
-        <Btn onClick={() => setEditing('new')}>Add school</Btn>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
+          <Btn onClick={() => setEditing('new')}>Add school</Btn>
+        </div>
       </div>
 
       <div style={{
@@ -106,8 +111,11 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
                             {s.zone}{s.address ? ` · ${s.address}` : ''}
                           </div>
                         </div>
-                        <M style={{ fontSize: 11, color: T.faint, whiteSpace: 'nowrap' }}>
-                          {s.radius_metres} m
+                        <M style={{
+                          fontSize: 11, whiteSpace: 'nowrap',
+                          color: s.latitude === null ? T.accent : T.faint,
+                        }}>
+                          {s.latitude === null ? 'Location not set' : `${s.radius_metres} m`}
                         </M>
                       </div>
                     </button>
@@ -115,6 +123,11 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
                 </div>
               </>
             )}
+
+      {mapOpen && (
+        <SchoolMap T={T} schools={list} isPhone={isPhone}
+          onViewDetails={(id) => setOpen(id)} onClose={() => setMapOpen(false)} />
+      )}
 
       {editing && (
         <SchoolForm T={T} api={api} isPhone={isPhone}
@@ -132,8 +145,12 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
 function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
   const detail = useResource(() => api.school(id), [id]);
   const team = useResource(() => api.admin.employees(), []);
+  // Reports carry the GPS a trainer's phone recorded at the gate. Useful
+  // evidence, but never adopted without an admin saying so.
+  const incidents = useResource(() => api.admin.incidents('Open'), []);
   const [busy, setBusy] = useState(null);
   const [problem, setProblem] = useState(null);
+  const [confirming, setConfirming] = useState(null);
 
   const assign = async (employeeId, remove) => {
     setBusy(employeeId); setProblem(null);
@@ -169,16 +186,47 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
       </M>
 
       <div style={{
-        display: 'grid', gap: 20, marginBottom: 40,
+        display: 'grid', gap: 20, marginBottom: 28,
         gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(auto-fit,minmax(140px,1fr))',
       }}>
-        {[['Latitude', s.latitude], ['Longitude', s.longitude],
-          ['Radius', `${s.radius_metres} m`], ['Status', s.is_active ? 'Active' : 'Inactive']].map(([k, v]) => (
+        {[['Radius', `${s.radius_metres} m`], ['Status', s.is_active ? 'Active' : 'Inactive'],
+          ...(s.contact_person ? [['Contact', s.contact_person]] : []),
+          ...(s.contact_phone ? [['Phone', s.contact_phone]] : [])].map(([k, v]) => (
           <div key={k}>
             <div className="mono" style={label}>{k}</div>
             <M style={{ fontSize: 14 }}>{v}</M>
           </div>
         ))}
+      </div>
+
+      {/* A school with no position cannot be matched, so this states it
+          plainly rather than showing an empty coordinate field. */}
+      <div style={{ marginBottom: 40 }}>
+        <div className="mono" style={label}>Location</div>
+        {s.latitude === null ? (
+          <>
+            <div style={{ fontSize: 14, color: T.accent, marginBottom: 8 }}>Location not set</div>
+            <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 14 }}>
+              Nobody can punch in here until a position is confirmed. Either enter
+              coordinates from Google Maps, or confirm one from a trainer's report below.
+            </div>
+            <Btn variant="line" onClick={() => onEdit(s)}>Set School Location</Btn>
+          </>
+        ) : (
+          <>
+            <M style={{ fontSize: 14 }}>{s.latitude}, {s.longitude}</M>
+            {s.location_set_at && (
+              <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 6 }}>
+                confirmed {new Date(s.location_set_at).toLocaleDateString('en-IN',
+                  { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' })}
+              </M>
+            )}
+            <a className="press" href={directionsUrl(s, null)} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 13, color: T.text, display: 'inline-block', marginTop: 10 }}>
+              Get Directions
+            </a>
+          </>
+        )}
       </div>
 
       {s.address && (
@@ -237,6 +285,59 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
         </>
       )}
 
+      {/* Only offered when there is nothing trusted yet, so a confirmed
+          coordinate is never quietly replaced by a later reading. */}
+      {s.latitude === null && (incidents.data || []).some((i) => i.reported_latitude !== null) && (
+        <div style={{ marginBottom: 40 }}>
+          <div className="mono" style={{ ...label, marginBottom: 12 }}>Positions reported by employees</div>
+          <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
+            Recorded when a punch failed. Check it looks right before confirming it
+            as this school's permanent location.
+          </div>
+          {(incidents.data || []).filter((i) => i.reported_latitude !== null).slice(0, 5).map((i) => (
+            <div key={i.incident_id} style={{
+              padding: 14, borderRadius: 10, border: `1px solid ${T.line}`, marginBottom: 12,
+            }}>
+              <div style={{ fontSize: 13, marginBottom: 4 }}>{i.employee_name}</div>
+              <M style={{ fontSize: 11, color: T.faint, display: 'block', marginBottom: 10 }}>
+                {new Date(i.created_at).toLocaleString('en-IN',
+                  { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                {i.reported_accuracy ? ` · ±${i.reported_accuracy} m` : ''}
+              </M>
+              <EvidenceMap T={T} latitude={i.reported_latitude} longitude={i.reported_longitude}
+                accuracy={i.reported_accuracy} label={i.employee_name} />
+              <div style={{ marginTop: 12 }}>
+                {confirming === i.incident_id ? (
+                  <div className="rise">
+                    <div style={{ fontSize: 13, color: T.accent, marginBottom: 10, lineHeight: 1.6 }}>
+                      Set this as {s.name}'s permanent location? Attendance will be
+                      matched against it from now on.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Btn variant="line" onClick={() => setConfirming(null)}>Cancel</Btn>
+                      <Btn busy={busy === i.incident_id} onClick={async () => {
+                        setBusy(i.incident_id); setProblem(null);
+                        try {
+                          await api.admin.setSchoolLocationFromIncident(id,
+                            { incidentId: i.incident_id, confirm: true }, newActionKey());
+                          setConfirming(null);
+                          await detail.reload();
+                        } catch (e) { setProblem(e); }
+                        finally { setBusy(null); }
+                      }}>Yes, confirm location</Btn>
+                    </div>
+                  </div>
+                ) : (
+                  <Btn variant="line" onClick={() => setConfirming(i.incident_id)}>
+                    Set School Location from this
+                  </Btn>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Recent visits</div>
       {!(s.recentVisits || []).length
         ? <Blank title="No visits recorded here yet" />
@@ -268,6 +369,9 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
     name: school?.name || '',
     zone: school?.zone || '',
     address: school?.address || '',
+    contactPerson: school?.contact_person || '',
+    contactDesignation: school?.contact_designation || '',
+    contactPhone: school?.contact_phone || '',
     latitude: school?.latitude ?? '',
     longitude: school?.longitude ?? '',
     radiusMetres: school?.radius_metres ?? 100,
@@ -278,8 +382,12 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
 
   const lat = Number(f.latitude), lng = Number(f.longitude), radius = Number(f.radiusMetres);
-  const latOk = f.latitude !== '' && Number.isFinite(lat) && lat >= -90 && lat <= 90;
-  const lngOk = f.longitude !== '' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
+  // Coordinates are optional: a school is usually known before anyone has
+  // stood at the gate. But half a coordinate would look set and match
+  // nothing, so it is both or neither.
+  const blank = String(f.latitude).trim() === '' && String(f.longitude).trim() === '';
+  const latOk = blank || (Number.isFinite(lat) && lat >= -90 && lat <= 90 && String(f.latitude).trim() !== '');
+  const lngOk = blank || (Number.isFinite(lng) && lng >= -180 && lng <= 180 && String(f.longitude).trim() !== '');
   const radiusOk = Number.isInteger(radius) && radius >= 20 && radius <= 2000;
   const incomplete = !f.name.trim() || !f.zone.trim() || !latOk || !lngOk || !radiusOk;
 
@@ -288,7 +396,11 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
     const body = {
       name: f.name.trim(), zone: f.zone.trim(),
       ...(f.address.trim() ? { address: f.address.trim() } : {}),
-      latitude: lat, longitude: lng, radiusMetres: radius, isActive: f.isActive,
+      ...(f.contactPerson.trim() ? { contactPerson: f.contactPerson.trim() } : {}),
+      ...(f.contactDesignation.trim() ? { contactDesignation: f.contactDesignation.trim() } : {}),
+      ...(f.contactPhone.trim() ? { contactPhone: f.contactPhone.trim() } : {}),
+      latitude: blank ? null : lat, longitude: blank ? null : lng,
+      radiusMetres: radius, isActive: f.isActive,
     };
     try {
       if (editing) await api.admin.updateSchool(school.location_id, body, newActionKey());
@@ -354,14 +466,32 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
             placeholder="Optional" style={{ ...field, resize: 'vertical' }} />
         </div>
 
+        <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 20 }}>
+          <div>
+            <div className="mono" style={label}>Contact person</div>
+            <input value={f.contactPerson} onChange={(e) => set({ contactPerson: e.target.value })}
+              placeholder="Optional" style={field} />
+          </div>
+          <div>
+            <div className="mono" style={label}>Designation</div>
+            <input value={f.contactDesignation} onChange={(e) => set({ contactDesignation: e.target.value })}
+              placeholder="Principal" style={field} />
+          </div>
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <div className="mono" style={label}>Contact phone</div>
+          <input value={f.contactPhone} onChange={(e) => set({ contactPhone: e.target.value })}
+            placeholder="Optional" className="mono" style={field} />
+        </div>
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 8 }}>
           <div>
-            <div className="mono" style={label}>Latitude</div>
+            <div className="mono" style={label}>Latitude (optional)</div>
             <input value={f.latitude} onChange={(e) => set({ latitude: e.target.value })}
               placeholder="13.082700" className="mono" style={latOk || f.latitude === '' ? field : bad} />
           </div>
           <div>
-            <div className="mono" style={label}>Longitude</div>
+            <div className="mono" style={label}>Longitude (optional)</div>
             <input value={f.longitude} onChange={(e) => set({ longitude: e.target.value })}
               placeholder="80.270700" className="mono" style={lngOk || f.longitude === '' ? field : bad} />
           </div>
@@ -369,8 +499,9 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
         {/* Coordinates decide whether a real trainer can punch in, so this
             says plainly where they must come from. Nothing is guessed. */}
         <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 24 }}>
-          Stand at the school, long-press your position in Google Maps, and copy the two
-          numbers it shows. Do not estimate: a wrong coordinate means nobody can punch in there.
+          {blank
+            ? 'Leave these blank if you do not have them yet. The school will be saved, but nobody can punch in there until a position is confirmed.'
+            : 'Stand at the school, long-press your position in Google Maps, and copy the two numbers it shows. Do not estimate: a wrong coordinate means nobody can punch in there.'}
         </div>
 
         {editing && (
