@@ -1,43 +1,37 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 /**
- * School Map.
+ * School Map — a real basemap with roads and boundaries.
  *
- * A locator, not a street map. It plots schools on India's bounding box
- * so an admin can see roughly where they are and how they cluster by zone.
+ * Tiles come from OpenStreetMap: free, no API key, no account, no bill.
+ * Nothing about a school is sent to them; a tile request only reveals
+ * which square of the world is being viewed.
  *
- * Deliberately no tile provider, no API key, no map library and no cost:
- * for ~140 schools the useful questions are "where roughly is this" and
- * "take me there", and the second is answered better by Google Maps than
- * by anything embedded here.
+ * Markers are circles rather than Leaflet's default pin, which loads image
+ * assets by URL and breaks under a bundler. Circles need no assets and
+ * match the rest of the interface.
  */
 
-// Mainland India plus a margin, so Chennai does not sit on the edge.
-const BOUNDS = { minLat: 6.5, maxLat: 35.8, minLng: 67.5, maxLng: 97.5 };
+const INDIA_CENTRE = [22.0, 79.0];
+const ACCENT = '#d9451f';
 
-/** Equirectangular projection. Fine at this scale for a locator. */
-function project(lat, lng, w, h) {
-  const x = ((lng - BOUNDS.minLng) / (BOUNDS.maxLng - BOUNDS.minLng)) * w;
-  const y = (1 - (lat - BOUNDS.minLat) / (BOUNDS.maxLat - BOUNDS.minLat)) * h;
-  return { x, y };
-}
-const inBounds = (lat, lng) =>
-  lat >= BOUNDS.minLat && lat <= BOUNDS.maxLat && lng >= BOUNDS.minLng && lng <= BOUNDS.maxLng;
-
-/**
- * Google Maps directions link. Opened in a new tab; navigation happens
- * there, not here.
- */
+/** Google Maps directions. Navigation happens there, not here. */
 export function directionsUrl(school, from) {
   if (school.latitude === null || school.longitude === null) return null;
-  const dest = `${school.latitude},${school.longitude}`;
-  const params = new URLSearchParams({ api: '1', destination: dest, travelmode: 'driving' });
-  // Directions from where the admin actually is, when they have shared it.
+  const params = new URLSearchParams({
+    api: '1',
+    destination: `${school.latitude},${school.longitude}`,
+    travelmode: 'driving',
+  });
   if (from && Number.isFinite(from.latitude) && Number.isFinite(from.longitude)) {
     params.set('origin', `${from.latitude},${from.longitude}`);
   }
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
+
+const hasCoords = (s) => s.latitude !== null && s.longitude !== null;
 
 export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   const [me, setMe] = useState(null);
@@ -45,25 +39,64 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   const [locError, setLocError] = useState(null);
   const [selected, setSelected] = useState(null);
 
-  const W = 600, H = 620;
+  const holder = useRef(null);
+  const map = useRef(null);
+  const markerLayer = useRef(null);
+  const meLayer = useRef(null);
 
-  // Only schools with a confirmed position are plotted. Nothing is guessed.
+  // Only schools with a confirmed position are plotted. Never guessed.
   const plotted = useMemo(
-    () => (schools || [])
-      .filter((s) => s.latitude !== null && s.longitude !== null)
+    () => (schools || []).filter(hasCoords)
       .map((s) => ({ ...s, lat: Number(s.latitude), lng: Number(s.longitude) }))
-      .filter((s) => inBounds(s.lat, s.lng))
-      .map((s) => ({ ...s, ...project(s.lat, s.lng, W, H) })),
+      .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng)),
     [schools]);
 
-  const missing = (schools || []).filter((s) => s.latitude === null || s.longitude === null);
-  const outside = (schools || []).filter((s) =>
-    s.latitude !== null && !inBounds(Number(s.latitude), Number(s.longitude)));
+  const missing = (schools || []).filter((s) => !hasCoords(s));
 
-  const myPoint = me && inBounds(me.latitude, me.longitude)
-    ? project(me.latitude, me.longitude, W, H) : null;
+  useEffect(() => {
+    if (!holder.current || map.current) return;
+    map.current = L.map(holder.current, { center: INDIA_CENTRE, zoom: 4, minZoom: 3 });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map.current);
+    markerLayer.current = L.layerGroup().addTo(map.current);
+    return () => { map.current?.remove(); map.current = null; };
+  }, []);
 
-  /** Location is read once, only when the admin asks. Never watched. */
+  // Redraw whenever the school list changes.
+  useEffect(() => {
+    if (!map.current || !markerLayer.current) return;
+    markerLayer.current.clearLayers();
+
+    for (const s of plotted) {
+      // The radius the server actually matches against, drawn to scale, so
+      // an admin can see whether it covers the school grounds.
+      L.circle([s.lat, s.lng], {
+        radius: s.radius_metres || 100,
+        color: ACCENT, weight: 1, opacity: 0.5, fillColor: ACCENT, fillOpacity: 0.07,
+      }).addTo(markerLayer.current);
+
+      L.circleMarker([s.lat, s.lng], {
+        radius: 7, color: '#ffffff', weight: 2,
+        fillColor: s.is_active ? '#1a1a1a' : '#9a9a9a', fillOpacity: 1,
+      })
+        .addTo(markerLayer.current)
+        .bindTooltip(s.name, { direction: 'top', offset: [0, -8] })
+        .on('click', () => setSelected(s));
+    }
+
+    if (plotted.length === 1) map.current.setView([plotted[0].lat, plotted[0].lng], 15);
+    else if (plotted.length > 1) {
+      map.current.fitBounds(L.latLngBounds(plotted.map((s) => [s.lat, s.lng])).pad(0.25));
+    }
+  }, [plotted]);
+
+  useEffect(() => {
+    if (selected && map.current) map.current.setView([selected.lat, selected.lng], 16);
+  }, [selected]);
+
+  /** Read once, only when the admin asks. Never watched. */
   const locate = () => {
     setLocating(true); setLocError(null);
     if (!navigator.geolocation) {
@@ -73,9 +106,22 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
     }
     navigator.geolocation.getCurrentPosition(
       (p) => {
-        setMe({ latitude: p.coords.latitude, longitude: p.coords.longitude,
-                accuracy: Math.round(p.coords.accuracy) });
-        setLocating(false);
+        const fix = {
+          latitude: p.coords.latitude, longitude: p.coords.longitude,
+          accuracy: Math.round(p.coords.accuracy),
+        };
+        setMe(fix); setLocating(false);
+        if (!map.current) return;
+        meLayer.current?.remove();
+        meLayer.current = L.layerGroup([
+          L.circle([fix.latitude, fix.longitude], {
+            radius: fix.accuracy, color: ACCENT, weight: 1, opacity: 0.4, fillOpacity: 0.08,
+          }),
+          L.circleMarker([fix.latitude, fix.longitude], {
+            radius: 6, color: '#ffffff', weight: 2, fillColor: ACCENT, fillOpacity: 1,
+          }).bindTooltip('You are here', { direction: 'top', offset: [0, -8] }),
+        ]).addTo(map.current);
+        map.current.setView([fix.latitude, fix.longitude], 13);
       },
       (e) => {
         setLocError(e.code === 1
@@ -99,7 +145,7 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
       alignItems: isPhone ? 'flex-end' : 'center', justifyContent: 'center', padding: isPhone ? 0 : 16,
     }}>
       <div className="rise" style={{
-        width: '100%', maxWidth: 720, background: T.bg, borderRadius: isPhone ? '16px 16px 0 0' : 16,
+        width: '100%', maxWidth: 760, background: T.bg, borderRadius: isPhone ? '16px 16px 0 0' : 16,
         border: `1px solid ${T.line}`, maxHeight: '94vh', overflowY: 'auto', padding: isPhone ? 20 : 28,
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
@@ -109,77 +155,35 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
         </div>
         <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
           {plotted.length} of {(schools || []).length} schools have a confirmed position.
-          Tap a marker for details and directions.
+          The shaded ring is the check-in radius. Tap a marker for details.
         </div>
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
           <button className="press" onClick={locate} disabled={locating} style={btn(false)}>
             {locating ? 'Locating…' : me ? 'Update my location' : 'Show my location'}
           </button>
-          {me && (
-            <span className="mono" style={{ ...label, alignSelf: 'center' }}>
-              you: {me.latitude.toFixed(4)}, {me.longitude.toFixed(4)} · ±{me.accuracy} m
-            </span>
+          {plotted.length > 0 && (
+            <button className="press" style={btn(false)}
+              onClick={() => map.current?.fitBounds(
+                L.latLngBounds(plotted.map((s) => [s.lat, s.lng])).pad(0.25))}>
+              Fit all schools
+            </button>
           )}
+          {me && <span className="mono" style={label}>±{me.accuracy} m</span>}
         </div>
         {locError && (
-          <div className="fade" style={{ fontSize: 12, color: T.accent, marginBottom: 14, lineHeight: 1.6 }}>
+          <div className="fade" style={{ fontSize: 12, color: T.accent, marginBottom: 12, lineHeight: 1.6 }}>
             {locError}
           </div>
         )}
 
-        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Map of school locations across India"
-          style={{
-            width: '100%', height: 'auto', background: T.sub,
-            border: `1px solid ${T.line}`, borderRadius: 12, display: 'block',
-          }}>
-          {/* Degree grid: enough reference to read position, nothing more. */}
-          {[10, 15, 20, 25, 30, 35].map((lat) => {
-            const { y } = project(lat, BOUNDS.minLng, W, H);
-            return (
-              <g key={`lat${lat}`}>
-                <line x1={0} y1={y} x2={W} y2={y} stroke={T.line} strokeWidth="1" strokeDasharray="3 5" />
-                <text x={4} y={y - 4} fontSize="10" fill={T.faint} className="mono">{lat}°N</text>
-              </g>
-            );
-          })}
-          {[70, 75, 80, 85, 90, 95].map((lng) => {
-            const { x } = project(BOUNDS.minLat, lng, W, H);
-            return (
-              <g key={`lng${lng}`}>
-                <line x1={x} y1={0} x2={x} y2={H} stroke={T.line} strokeWidth="1" strokeDasharray="3 5" />
-                <text x={x + 4} y={H - 6} fontSize="10" fill={T.faint} className="mono">{lng}°E</text>
-              </g>
-            );
-          })}
-
-          {myPoint && (
-            <g>
-              <circle cx={myPoint.x} cy={myPoint.y} r="14" fill={T.accent} opacity="0.15" />
-              <circle cx={myPoint.x} cy={myPoint.y} r="5" fill={T.accent} stroke={T.bg} strokeWidth="2" />
-              <text x={myPoint.x + 10} y={myPoint.y - 8} fontSize="11" fill={T.accent}>You</text>
-            </g>
-          )}
-
-          {plotted.map((s) => {
-            const on = selected?.location_id === s.location_id;
-            return (
-              <g key={s.location_id} onClick={() => setSelected(s)} style={{ cursor: 'pointer' }}>
-                {/* Generous invisible hit area: fingers are not cursors. */}
-                <circle cx={s.x} cy={s.y} r="16" fill="transparent" />
-                <circle cx={s.x} cy={s.y} r={on ? 8 : 5}
-                  fill={s.is_active ? T.text : T.faint}
-                  stroke={T.bg} strokeWidth="2" />
-                {on && <circle cx={s.x} cy={s.y} r="14" fill="none" stroke={T.text} strokeWidth="1.5" />}
-              </g>
-            );
-          })}
-        </svg>
+        <div ref={holder} style={{
+          width: '100%', height: isPhone ? 340 : 440, borderRadius: 12,
+          border: `1px solid ${T.line}`, overflow: 'hidden', background: T.sub, zIndex: 0,
+        }} />
 
         {selected && (
-          <div className="rise" style={{
-            marginTop: 16, padding: 16, borderRadius: 12, border: `1px solid ${T.line}`,
-          }}>
+          <div className="rise" style={{ marginTop: 16, padding: 16, borderRadius: 12, border: `1px solid ${T.line}` }}>
             <div style={{ fontSize: 15, fontWeight: 500 }}>{selected.name}</div>
             <div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>
               {selected.zone}{selected.is_active ? '' : ' · inactive'}
@@ -199,9 +203,8 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
               </div>
             )}
             <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
-              {selected.latitude}, {selected.longitude}
+              {selected.latitude}, {selected.longitude} · {selected.radius_metres} m radius
             </div>
-
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
               <button className="press" style={btn(false)}
                 onClick={() => { onViewDetails(selected.location_id); onClose(); }}>
@@ -248,13 +251,6 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
             )}
           </div>
         )}
-
-        {outside.length > 0 && (
-          <div style={{ fontSize: 12, color: T.accent, marginTop: 16, lineHeight: 1.6 }}>
-            {outside.length} school{outside.length > 1 ? 's have' : ' has'} coordinates outside India.
-            Check them: a wrong coordinate means nobody can punch in there.
-          </div>
-        )}
       </div>
     </div>
   );
@@ -266,23 +262,37 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
  */
 export function EvidenceMap({ T, latitude, longitude, accuracy, label }) {
   const lat = Number(latitude), lng = Number(longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const W = 320, H = 200;
-  const p = inBounds(lat, lng) ? project(lat, lng, W, H) : null;
+  const holder = useRef(null);
+  const map = useRef(null);
+  const ok = Number.isFinite(lat) && Number.isFinite(lng);
+
+  useEffect(() => {
+    if (!holder.current || map.current || !ok) return;
+    map.current = L.map(holder.current, {
+      center: [lat, lng], zoom: 16, zoomControl: false, scrollWheelZoom: false,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap',
+    }).addTo(map.current);
+    if (accuracy) {
+      L.circle([lat, lng], {
+        radius: accuracy, color: ACCENT, weight: 1, opacity: 0.4, fillOpacity: 0.08,
+      }).addTo(map.current);
+    }
+    L.circleMarker([lat, lng], {
+      radius: 6, color: '#ffffff', weight: 2, fillColor: ACCENT, fillOpacity: 1,
+    }).addTo(map.current);
+    return () => { map.current?.remove(); map.current = null; };
+  }, [lat, lng, accuracy, ok]);
+
+  if (!ok) return null;
 
   return (
     <div>
-      {p ? (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{
-          width: '100%', height: 'auto', background: T.sub,
-          border: `1px solid ${T.line}`, borderRadius: 10, display: 'block',
-        }}>
-          <circle cx={p.x} cy={p.y} r="12" fill={T.accent} opacity="0.16" />
-          <circle cx={p.x} cy={p.y} r="4" fill={T.accent} stroke={T.bg} strokeWidth="1.5" />
-        </svg>
-      ) : (
-        <div style={{ fontSize: 12, color: T.accent }}>Recorded position is outside India.</div>
-      )}
+      <div ref={holder} style={{
+        width: '100%', height: 180, borderRadius: 10,
+        border: `1px solid ${T.line}`, overflow: 'hidden', background: T.sub, zIndex: 0,
+      }} />
       <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>
         {label ? `${label} · ` : ''}{lat.toFixed(5)}, {lng.toFixed(5)}{accuracy ? ` · ±${accuracy} m` : ''}
       </div>

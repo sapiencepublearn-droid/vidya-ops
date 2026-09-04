@@ -240,6 +240,63 @@ test('no automatic 19:00 punch-out exists in the UI', () => {
   assert.equal(/19:00|autoClose|auto_close|AUTO_CLOSED/.test(code), false);
 });
 
+/* ─────────────────────────────────────────── school map */
+
+test('the map renders a real basemap, not a drawn grid', () => {
+  const Map = read('../web/SchoolMap.jsx');
+  assert.match(Map, /tile\.openstreetmap\.org/, 'uses real map tiles');
+  assert.match(Map, /L\.map\(/, 'uses a map library rather than hand-drawn SVG');
+  assert.equal(/Degree grid|strokeDasharray="3 5"/.test(Map), false,
+    'the coordinate-grid placeholder is gone');
+});
+
+test('the basemap needs no API key or paid account', () => {
+  const Map = strip(read('../web/SchoolMap.jsx'));
+  assert.equal(/api[_-]?key|apiKey|access_token|mapbox|googleapis\.com\/maps\/api/i.test(Map), false,
+    'no keyed or paid map provider');
+});
+
+test('only schools with coordinates get a marker', () => {
+  const Map = read('../web/SchoolMap.jsx');
+  assert.match(Map, /const hasCoords = \(s\) => s\.latitude !== null && s\.longitude !== null/);
+  assert.match(Map, /\.filter\(hasCoords\)/);
+  assert.match(Map, /Location not set \(\{missing\.length\}\)/,
+    'schools without coordinates are listed rather than plotted');
+});
+
+test('a marker shows the school name, zone and details', () => {
+  const Map = read('../web/SchoolMap.jsx');
+  assert.match(Map, /bindTooltip\(s\.name/);
+  assert.match(Map, /\{selected\.zone\}/);
+  assert.match(Map, /View Details/);
+});
+
+test('directions open Google Maps, with an origin only when shared', () => {
+  const Map = read('../web/SchoolMap.jsx');
+  assert.match(Map, /google\.com\/maps\/dir/);
+  assert.match(Map, /params\.set\('origin'/);
+  assert.match(Map, /if \(school\.latitude === null \|\| school\.longitude === null\) return null/,
+    'a school with no position gets no directions link');
+});
+
+test('SECURITY: the map reads location once and never watches it', () => {
+  const Map = read('../web/SchoolMap.jsx');
+  assert.equal(/watchPosition/.test(Map), false, 'no continuous tracking');
+  assert.equal((Map.match(/getCurrentPosition/g) || []).length, 1,
+    'location is requested in exactly one place, on an explicit tap');
+});
+
+test('SECURITY: the tile exception does not loosen scripts or connections', () => {
+  // Raw source, not stripped: the tile URL contains "/*", which a naive
+  // comment-stripper mistakes for the start of a block comment.
+  const app = read('../src/app.js');
+  const block = app.slice(app.indexOf('contentSecurityPolicy'), app.indexOf('app.use(express.json'));
+  assert.match(block, /'img-src':/, 'img-src is widened');
+  assert.equal(/'script-src'|'connect-src'|'default-src'|'frame-ancestors'/.test(block), false,
+    'every other directive is left at its default');
+  assert.match(block, /useDefaults: true/, 'the rest of the default policy still applies');
+});
+
 /* ─────────────────────────── plumbing */
 
 test('every client method the new screens call exists', () => {

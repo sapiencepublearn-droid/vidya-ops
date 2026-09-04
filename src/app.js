@@ -25,7 +25,20 @@ export function createApp({ limits: over = {} } = {}) {
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
-  app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
+  // The default policy allows images only from this origin, which blocks
+  // every map tile. This adds the OpenStreetMap tile hosts and nothing
+  // else: scripts, styles and connections stay locked to 'self', so a
+  // compromised tile host still cannot run code or exfiltrate data.
+  const tileHosts = ['https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'];
+  app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'img-src': ["'self'", 'data:', 'blob:', ...tileHosts],
+      },
+    },
+  }));
 
   // The server generates the authoritative request id. A client-supplied
   // X-Request-Id is recorded separately as a correlation hint only: letting
