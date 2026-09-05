@@ -30,12 +30,15 @@ export function createApp({ limits: over = {} } = {}) {
   // else: scripts, styles and connections stay locked to 'self', so a
   // compromised tile host still cannot run code or exfiltrate data.
   const tileHosts = ['https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'];
-  app.use(helmet({
+  app.use(helmet(
+    {
     crossOriginResourcePolicy: { policy: 'same-site' },
     contentSecurityPolicy: {
       useDefaults: true,
       directives: {
         'img-src': ["'self'", 'data:', 'blob:', ...tileHosts],
+  'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
       },
     },
     // OpenStreetMap's tile policy (changed March 2026) requires a Referer
