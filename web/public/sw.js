@@ -15,7 +15,11 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   // Never serve API data from cache. A stale task list is confusing;
   // a cached check-in would be wrong.
-  if (url.pathname.startsWith('/api/') || e.request.method !== 'GET') return;
+  if (
+  url.origin !== self.location.origin ||
+  url.pathname.startsWith('/api/') ||
+  e.request.method !== 'GET'
+) return;
   e.respondWith(
     fetch(e.request).catch(() => caches.match(e.request).then((r) => r || caches.match('/index.html')))
   );
