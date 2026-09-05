@@ -1,5 +1,4 @@
-const SHELL = 'ops-shell-v1';
-
+const SHELL = 'ops-shell-v2';
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(['/', '/index.html'])));
   self.skipWaiting();
