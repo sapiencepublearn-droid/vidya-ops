@@ -258,7 +258,11 @@ function Styles({ T }) {
       *{font-family:Inter,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;box-sizing:border-box}
       html,body{margin:0;overflow-x:hidden;max-width:100%}
       #root{overflow-x:hidden}
-      img,svg{max-width:100%}
+      img:not(.leaflet-tile),svg{max-width:100%}
+.leaflet-container img.leaflet-tile{
+  max-width:none!important;
+  max-height:none!important;
+}
       .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
       .tight{letter-spacing:-.035em}
       input:focus,textarea:focus,select:focus{border-color:${T.text}!important}
