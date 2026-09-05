@@ -883,7 +883,6 @@ function Admin({ me, onOut, theme, setTheme }) {
   const api = useApi();
   const isPhone = useIsPhone();
   const [page, setPage] = useState('dashboard');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'Words'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit']];
 
   const body = (
@@ -914,158 +913,33 @@ function Admin({ me, onOut, theme, setTheme }) {
           padding: '14px 20px', borderBottom: `1px solid ${T.line}`,
           position: 'sticky', top: 0, background: T.bg, zIndex: 20,
         }}>
-          <button
-            className="press"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open navigation"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: T.text,
-              fontSize: 22,
-              cursor: 'pointer',
-              padding: 4,
-              lineHeight: 1,
-            }}
-          >
-            ☰
-          </button>
-
           <Brand size={22} showName={false} />
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <ThemeToggle theme={theme} setTheme={setTheme} />
+            <button className="press" onClick={async () => { try { await api.logout(); } finally { onOut(); } }}
+              style={{ background: 'none', border: 'none', color: T.mute, fontSize: 12, cursor: 'pointer', padding: 8 }}>
+              Sign out
+            </button>
           </div>
         </header>
 
         {body}
 
-        {sidebarOpen && (
-          <>
-            <div
-              onClick={() => setSidebarOpen(false)}
-              style={{
-                position: 'fixed',
-                inset: 0,
-                background: 'rgba(0,0,0,.45)',
-                zIndex: 40,
-              }}
-            />
-
-            <aside
-              className="rise"
-              style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                bottom: 0,
-                width: '82%',
-                maxWidth: 320,
-                background: T.bg,
-                borderRight: `1px solid ${T.line}`,
-                zIndex: 50,
-                padding: '24px 24px',
-                display: 'flex',
-                flexDirection: 'column',
-                boxSizing: 'border-box',
-              }}
-            >
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: 32,
-              }}>
-                <Brand size={24} />
-
-                <button
-                  className="press"
-                  onClick={() => setSidebarOpen(false)}
-                  aria-label="Close navigation"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: T.mute,
-                    fontSize: 24,
-                    cursor: 'pointer',
-                    padding: 4,
-                    lineHeight: 1,
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-
-              <div style={{ display: 'grid', gap: 4 }}>
-                {nav.map(([k, label]) => (
-                  <button
-                    key={k}
-                    className="press"
-                    onClick={() => {
-                      setPage(k);
-                      setSidebarOpen(false);
-                    }}
-                    style={{
-                      width: '100%',
-                      background: page === k ? T.sub : 'transparent',
-                      border: 'none',
-                      borderRadius: 8,
-                      textAlign: 'left',
-                      padding: '13px 12px',
-                      cursor: 'pointer',
-                      fontSize: 15,
-                      color: page === k ? T.text : T.mute,
-                      fontWeight: page === k ? 500 : 400,
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              <div style={{
-                marginTop: 'auto',
-                paddingTop: 20,
-                borderTop: `1px solid ${T.line}`,
-              }}>
-                <div style={{
-                  fontSize: 12,
-                  color: T.mute,
-                  marginBottom: 8,
-                }}>
-                  {me.name}
-                </div>
-
-                <ThemeToggle theme={theme} setTheme={setTheme} />
-
-                <button
-                  className="press"
-                  onClick={async () => {
-                    try {
-                      await api.logout();
-                    } finally {
-                      setSidebarOpen(false);
-                      onOut();
-                    }
-                  }}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    background: 'none',
-                    border: 'none',
-                    color: T.mute,
-                    fontSize: 13,
-                    cursor: 'pointer',
-                    padding: '12px 8px',
-                    textAlign: 'left',
-                  }}
-                >
-                  Sign out
-                </button>
-              </div>
-            </aside>
-          </>
-        )}
+        <nav style={{
+          position: 'fixed', bottom: 0, left: 0, right: 0, display: 'flex',
+          background: T.bg, borderTop: `1px solid ${T.line}`, zIndex: 20,
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}>
+          {nav.map(([k, label]) => (
+            <button key={k} className="press" onClick={() => setPage(k)} style={{
+              flex: 1, padding: '14px 0', background: 'none', border: 'none', cursor: 'pointer',
+              color: page === k ? T.text : T.faint, fontSize: 12, position: 'relative',
+            }}>
+              {page === k && <span style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 18, height: 1.5, background: T.accent }} />}
+              {label}
+            </button>
+          ))}
+        </nav>
       </div>
     );
   }
