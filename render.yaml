@@ -2,7 +2,7 @@
 # Database is Neon (free tier), so only the web service is defined here.
 services:
   - type: web
-    name: vidya-ops
+    name: sapience-team
     runtime: node
     plan: free             # sleeps after 15 min idle; see README on keeping it awake
     region: singapore      # closest Render region to Chennai
