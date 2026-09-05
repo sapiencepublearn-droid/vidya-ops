@@ -38,6 +38,11 @@ export function createApp({ limits: over = {} } = {}) {
         'img-src': ["'self'", 'data:', 'blob:', ...tileHosts],
       },
     },
+    // OpenStreetMap's tile policy (changed March 2026) requires a Referer
+    // header on tile requests and blocks the exact values Helmet defaults
+    // to (no-referrer). This still reveals nothing sensitive: cross-origin
+    // requests only ever send the origin, never the path or query string.
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
 
   // The server generates the authoritative request id. A client-supplied
