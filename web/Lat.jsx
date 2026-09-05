@@ -14,7 +14,7 @@ export function LatCard({ T, lat, onOpen }) {
   if (lat.loading) {
     return (
       <div style={{ marginBottom: 40 }}>
-        <Eyebrow T={T}>Words today</Eyebrow>
+        <Eyebrow T={T}>LAT today</Eyebrow>
         <div className="pulse" style={{ height: 38, borderRadius: 6, background: T.hair }} />
       </div>
     );
@@ -22,7 +22,7 @@ export function LatCard({ T, lat, onOpen }) {
   if (lat.error || lat.data?.stage === 'none') {
     return (
       <div style={{ marginBottom: 40 }}>
-        <Eyebrow T={T}>Words today</Eyebrow>
+        <Eyebrow T={T}>LAT today</Eyebrow>
         <div style={{ fontSize: 14, color: T.mute }}>
           {lat.error ? 'Couldn\u2019t load today\u2019s words.' : 'Not published yet.'}
         </div>
@@ -46,7 +46,7 @@ export function LatCard({ T, lat, onOpen }) {
     <div style={{ marginBottom: 40 }}>
       <Eyebrow T={T} right={stage === 'done'
         ? <span className="pop" style={{ fontSize: 12, color: T.mute }}>Done today</span> : null}>
-        Words today
+        LAT today
       </Eyebrow>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 6 }}>{label}</div>
       {stage === 'done' && (
@@ -87,7 +87,7 @@ export function LatScreen({ T, api, lat, onBack }) {
   if (d.stage === 'none') return (
     <Padded>
       <Back T={T} onBack={onBack} />
-      <Empty T={T} title="No words yet today" hint="They appear here once the CEO publishes them." />
+      <Empty T={T} title="No LAT yet today" hint="It appears here once the CEO publishes today’s learning activity." />
     </Padded>
   );
 
@@ -95,10 +95,10 @@ export function LatScreen({ T, api, lat, onBack }) {
     <Padded>
       <Back T={T} onBack={onBack} />
       <h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: '0 0 6px' }}>
-        Today&rsquo;s {d.words.length} words
+        Today&rsquo;s LAT · {d.words.length} items
       </h1>
       <p style={{ fontSize: 13, color: T.mute, margin: '0 0 28px' }}>
-        Read them, then take the test. You get one attempt.
+        Read the learning items, then complete the learning check. You get one attempt.
       </p>
 
       <div style={{ borderTop: `1px solid ${T.line}` }}>
@@ -121,9 +121,9 @@ export function LatScreen({ T, api, lat, onBack }) {
           width: '100%', padding: '14px', borderRadius: 8, fontSize: 15, fontWeight: 500,
           background: busy ? T.hair : T.accent, color: busy ? T.faint : '#fff',
           border: 'none', cursor: busy ? 'default' : 'pointer',
-        }}>{busy ? 'Starting…' : 'Start test'}</button>
+        }}>{busy ? 'Starting…' : 'Start LAT'}</button>
         <div style={{ fontSize: 12, color: T.faint, textAlign: 'center', marginTop: 10 }}>
-          The words are hidden once the test begins.
+          The learning answers are hidden once the check begins.
         </div>
       </div>
     </Padded>
@@ -166,7 +166,7 @@ function LatTest({ T, api, data, onDone }) {
 
       <div key={p.word_id} className="rise">
         <div className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em', color: T.faint, marginBottom: 14 }}>
-          Spell the word
+          Learning check
         </div>
         <div style={{ fontSize: 19, lineHeight: 1.5, marginBottom: 10 }}>{p.meaning}</div>
         <div className="mono" style={{ fontSize: 12, color: T.faint, marginBottom: 28 }}>
@@ -177,7 +177,7 @@ function LatTest({ T, api, data, onDone }) {
           value={value} autoFocus autoCapitalize="none" autoCorrect="off" spellCheck={false}
           onChange={(e) => setAnswers({ ...answers, [p.word_id]: e.target.value })}
           onKeyDown={(e) => { if (e.key === 'Enter' && !last) next(); }}
-          placeholder="Type the word"
+          placeholder="Type your answer"
           style={{
             width: '100%', padding: '14px 0', fontSize: 22, background: 'transparent',
             border: 'none', borderBottom: `2px solid ${value.trim() ? T.text : T.line}`,
@@ -199,7 +199,7 @@ function LatTest({ T, api, data, onDone }) {
           background: busy ? T.hair : last ? T.accent : T.text, color: busy ? T.faint : T.bg,
           border: 'none', cursor: busy ? 'default' : 'pointer',
         }}>
-          {busy ? 'Submitting…' : last ? 'Submit test' : 'Next word'}
+          {busy ? 'Submitting…' : last ? 'Submit LAT' : 'Next'}
         </button>
       </div>
     </Padded>
@@ -213,14 +213,14 @@ function LatResult({ T, data, onBack }) {
       <Back T={T} onBack={onBack} />
       <div className="pop" style={{ marginBottom: 36 }}>
         <div className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em', color: T.faint, marginBottom: 12 }}>
-          Your mark
+          LAT result
         </div>
         <div className="tight" style={{ fontSize: 48, fontWeight: 600, lineHeight: 1 }}>
           {data.score}<span style={{ fontSize: 24, color: T.faint }}> / {data.total}</span>
         </div>
         <div style={{ marginTop: 18 }}><Meter T={T} value={data.score} max={data.total} /></div>
         <div style={{ fontSize: 13, color: T.mute, marginTop: 12 }}>
-          {pct === 100 ? 'Every word correct.' : pct >= 70 ? 'Good work. The misses are below.' : 'The words you missed are below, with the spelling.'}
+          {pct === 100 ? 'Every item correct.' : pct >= 70 ? 'Good work. The items to review are below.' : 'The items you missed are below, with the correct answer.'}
         </div>
       </div>
 
@@ -261,6 +261,7 @@ export function AdminLat({ T, api, results, onPublished, isPhone }) {
   }).filter((w) => w.word && w.meaning);
 
   const publish = async () => {
+    if (parsed.length !== 10) { setProblem({ message: 'LAT must contain exactly 10 learning items.' }); return; }
     setBusy(true); setProblem(null); setOk(false);
     try {
       await api.admin.publishWords(parsed);
@@ -276,11 +277,11 @@ export function AdminLat({ T, api, results, onPublished, isPhone }) {
 
   return (
     <>
-      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 32px' }}>Words</h1>
+      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 32px' }}>LAT</h1>
 
       <div style={{ display: 'grid', gap: isPhone ? 32 : 40, gridTemplateColumns: isPhone ? '1fr' : 'repeat(auto-fit,minmax(320px,1fr))' }}>
         <div>
-          <Eyebrow T={T}>Publish today</Eyebrow>
+          <Eyebrow T={T}>Publish today’s LAT</Eyebrow>
           <textarea
             value={text} onChange={(e) => { setText(e.target.value); setProblem(null); }} rows={10}
             placeholder={'conscience — an inner sense of right and wrong\nrhythm — a regular repeated pattern of sound'}
@@ -290,24 +291,24 @@ export function AdminLat({ T, api, results, onPublished, isPhone }) {
               outline: 'none', resize: 'vertical', fontFamily: 'inherit',
             }} />
           <div style={{ fontSize: 12, color: T.faint, marginTop: 10 }}>
-            One per line, word then meaning. {parsed.length > 0 && `${parsed.length} ready.`}
+            Exactly 10 items, one per line: word then meaning. {parsed.length > 0 && `${parsed.length} ready.`}
           </div>
 
           {problem && <Problem T={T} error={problem} />}
           {ok && <div className="pop" style={{ fontSize: 13, color: T.mute, marginTop: 14 }}>Published. Everyone has been notified.</div>}
 
-          <button className="press" onClick={publish} disabled={busy || !parsed.length} style={{
+          <button className="press" onClick={publish} disabled={busy || parsed.length !== 10} style={{
             marginTop: 18, padding: '12px 20px', borderRadius: 8, fontSize: 14, fontWeight: 500,
-            background: busy || !parsed.length ? T.hair : T.text,
-            color: busy || !parsed.length ? T.faint : T.bg,
-            border: 'none', cursor: busy || !parsed.length ? 'default' : 'pointer',
-          }}>{busy ? 'Publishing…' : `Publish ${parsed.length || ''} words`}</button>
+            background: busy || parsed.length !== 10 ? T.hair : T.text,
+            color: busy || parsed.length !== 10 ? T.faint : T.bg,
+            border: 'none', cursor: busy || parsed.length !== 10 ? 'default' : 'pointer',
+          }}>{busy ? 'Publishing…' : `Publish ${parsed.length || ''} LAT items`}</button>
         </div>
 
         <div>
           <Eyebrow T={T} right={avg !== null
             ? <span className="mono" style={{ fontSize: 11, color: T.faint }}>{avg}% average</span> : null}>
-            Today&rsquo;s results
+            Today&rsquo;s LAT results
           </Eyebrow>
           {results.loading ? <Skeletons T={T} />
             : results.error ? <Problem T={T} error={results.error} onRetry={results.reload} />
