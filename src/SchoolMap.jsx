@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+https://sapience-team.onrender.com/import React, { useState, useMemo, useRef, useEffect } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -56,13 +56,9 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   useEffect(() => {
     if (!holder.current || map.current) return;
     map.current = L.map(holder.current, { center: INDIA_CENTRE, zoom: 4, minZoom: 3 });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
-      // Required by OSM's tile usage policy: a Referer must reach their
-      // server. Set here too, independent of the page-level CSP header.
-      crossOrigin: true,
-      referrerPolicy: 'strict-origin-when-cross-origin',
     }).addTo(map.current);
     markerLayer.current = L.layerGroup().addTo(map.current);
     return () => { map.current?.remove(); map.current = null; };
@@ -275,10 +271,8 @@ export function EvidenceMap({ T, latitude, longitude, accuracy, label }) {
     map.current = L.map(holder.current, {
       center: [lat, lng], zoom: 16, zoomControl: false, scrollWheelZoom: false,
     });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; OpenStreetMap',
-      crossOrigin: true,
-      referrerPolicy: 'strict-origin-when-cross-origin',
     }).addTo(map.current);
     if (accuracy) {
       L.circle([lat, lng], {
