@@ -237,7 +237,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
         </div>
       )}
 
-      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} M={M} Btn={Btn} onSaved={() => detail.reload()} />
+      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} M={M} Btn={Btn} isPhone={isPhone} onSaved={() => detail.reload()} />
 
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
@@ -446,6 +446,8 @@ const excelDateText=(value)=>{const raw=normExcel(value);if(!raw)return '';if(/^
 const cleanExcelLabel=(v)=>normExcel(v).replace(/[:：]$/,'').replace(/\s+/g,' ').toLowerCase();
 const stripExcelLabel=(v)=>normExcel(v).replace(/^\s*[^:：]+[:：]\s*/,'').trim();
 const isBlankExcel=(v)=>{const x=normExcel(v).toLowerCase();return !x||x==='-'||x==='—'||x==='nil';};
+// Ignore accidental diagnostic text pasted into Excel comments.
+const isImportedDiagnosticText=(v)=>/sandbox does not have usable installed dependencies|won't claim a full production run passed/i.test(normExcel(v));
 
 // IMPORTANT: This importer is deliberately row-semantic for the supplied
 // School History workbook. The workbook is a form with special rows such as
@@ -471,7 +473,7 @@ function importSchoolHistoryTemplate(cells,current){
   const rightValues=(r,label)=>{const vals=rowVals(r),idx=vals.findIndex(x=>matchesLabel(x.value,label));return idx<0?[]:vals.slice(idx+1).map(x=>x.value).filter(v=>!isBlankExcel(v));};
   const valueRight=(r,label,offset=0)=>rightValues(r,label)[offset]||'';
   const rowLabel=(r)=>rowVals(r)[0]?.value||'';
-  const set=(path,value,date=false)=>{let v=normExcel(value);if(date)v=excelDateText(v);if(!isBlankExcel(v))Object.assign(out,setPath(out,path,v));};
+  const set=(path,value,date=false)=>{let v=normExcel(value);if(isImportedDiagnosticText(v))return;if(date)v=excelDateText(v);if(!isBlankExcel(v))Object.assign(out,setPath(out,path,v));};
 
   // Basic details
   for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){const r=rowWithLabel(label,1,8);if(r){const ownCell=labelCell(r,label);const own=ownCell&&!exact(ownCell.value,label)?normExcel(ownCell.value).replace(/^[^:：]+[:：]\s*/,''):'';set(key,own||valueRight(r,label));}}
@@ -494,7 +496,7 @@ function importSchoolHistoryTemplate(cells,current){
   for(const [label,key] of bookRows){const r=rowWithLabel(label,bpHeader?bpHeader+1:1,40);if(!r)continue;set(`booksPayment.${key}`,cell(r,cInitial));set(`booksPayment.${key}AdditionalOrders`,cell(r,cAdditional));set(`booksPayment.${key}Returns`,cell(r,cReturns));}
 
   const firstValueAfter=(r,label,stopLabels=[])=>{const vals=rowVals(r),lc=labelCell(r,label);if(!lc)return '';const stops=new Set(stopLabels.map(cleanExcelLabel));for(const x of vals.filter(v=>v.col>lc.col).sort((a,b)=>a.col-b.col)){const n=cleanExcelLabel(x.value);if(stops.has(n))break;if(!isBlankExcel(x.value))return x.value;}return '';};
-  const delivery=rowWithLabel('DELIVERY DATE',1,40);if(delivery){set('booksPayment.deliveryDate',firstValueAfter(delivery,'DELIVERY DATE'),true);const creditLabel=labelCell(delivery,'P.Y. Credit');if(creditLabel){const creditVal=rowVals(delivery).filter(x=>x.col>creditLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.creditNote',creditVal?`P.Y. Credit: ${creditVal}`:'');}}
+  const delivery=rowWithLabel('DELIVERY DATE',1,40);if(delivery){set('booksPayment.deliveryDate',firstValueAfter(delivery,'DELIVERY DATE'),true);const creditLabel=labelCell(delivery,'P.Y. Credit');if(creditLabel){const creditVal=rowVals(delivery).filter(x=>x.col>creditLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.creditNote',creditVal);}}
   const discount=rowWithLabel('DISCOUNT',1,40);if(discount){set('booksPayment.discount',firstValueAfter(discount,'DISCOUNT',['PAYMENT MODE']));const pm=labelCell(discount,'PAYMENT MODE');if(pm){const pv=rowVals(discount).filter(x=>x.col>pm.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.paymentMode',pv);}}
 
   const inv=rowWithLabel('SP INVOICE VALUE (MO)',1,45)||rowWithLabel('SP INVOICE VALUE (25-26)',1,45);if(inv){const moLabel=labelCell(inv,'SP INVOICE VALUE (MO)')||labelCell(inv,'SP INVOICE VALUE (25-26)');if(moLabel){const moVal=rowVals(inv).filter(x=>x.col>moLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.spInvoiceValueMo',moVal);set('booksPayment.spInvoiceValue2526',moVal);}const aoLabel=labelCell(inv,'SP INVOICE VALUE (AO)');if(aoLabel){const aoVal=firstValueAfter(inv,'SP INVOICE VALUE (AO)',['25-26 TOTAL']);set('booksPayment.spInvoiceValueAo',aoVal);}const totalLabel=labelCell(inv,'25-26 Total');if(totalLabel){const totalVal=rowVals(inv).filter(x=>x.col>totalLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.spInvoiceValue2526Total',totalVal);}}
@@ -531,19 +533,36 @@ function importSchoolHistoryTemplate(cells,current){
   const commentRows=[];for(const [r,vals] of rows){if(r>svcStart&&vals.some(x=>exact(x.value,'COMMENTS')))commentRows.push(r);}const lastComment=commentRows.at(-1);if(lastComment)set('comments',valueRight(lastComment,'COMMENTS',0));
   return {out,schoolName};
 }
-function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
-  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [contactChoice,setContactChoice]=useState('');
+function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone }) {
+  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false);
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
   useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
   const save=async()=>{setBusy(true);setProblem(null);try{const out=await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);onSaved?.(out?.school_history || draft);}catch(e){setProblem(e);}finally{setBusy(false);}};
   const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const imported=importSchoolHistoryTemplate(cells,draft);const excelSchool=imported.schoolName;if(excelSchool && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(imported.out);}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
-  const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:40,padding:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div><button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button></div>
-    {contactItems.length>0 && <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center'}}><select aria-label="School contact" value={contactChoice} onChange={e=>setContactChoice(e.target.value)} style={{flex:1,minWidth:0,padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:T.bg,color:T.text,fontSize:13}}><option value="">Contacts</option>{contactItems.map((x,i)=><option key={i} value={i}>{x.label}{x.name?` · ${x.name}`:''}{x.phone?` · ${x.phone}`:''}</option>)}</select>{contactChoice!=='' && contactItems[Number(contactChoice)]?.phone && <a className="press" href={`tel:${contactItems[Number(contactChoice)].phone.replace(/[^+\d]/g,'')}`} style={{padding:'8px 11px',borderRadius:8,border:`1px solid ${T.line}`,color:T.text,textDecoration:'none',fontSize:12}}>Call</a>}</div>}
-    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{const vals=fields.map(([path,label])=>[label,String(getPath(initial,path)).trim()]).filter(([,v])=>v);if(!vals.length)return null;return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}><div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>{vals.map(([label,value])=><div key={label} style={{display:'flex',gap:12,padding:'5px 0',fontSize:12}}><span style={{color:T.faint,minWidth:190}}>{label}</span><span style={{color:T.text,whiteSpace:'pre-wrap'}}>{value}</span></div>)}</div>})}
+    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{
+      if(title==='Contacts'){
+        const contacts=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']]
+          .map(([role,namePath,phonePath])=>({role,name:String(getPath(initial,namePath)).trim(),phone:String(getPath(initial,phonePath)).trim()}))
+          .filter(x=>x.name||x.phone);
+        if(!contacts.length)return null;
+        return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}>
+          <div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>
+          {contacts.map((x,i)=>{const tel=x.phone.replace(/[^+\d]/g,'');return <div key={i} style={{display:'grid',gridTemplateColumns:isPhone?'92px minmax(0,1fr)':'140px minmax(0,1fr)',gap:isPhone?8:12,alignItems:'start',padding:'6px 0',fontSize:12}}>
+            <span style={{color:T.faint}}>{x.role}</span>
+            <div style={{minWidth:0}}>
+              {x.name&&<div style={{color:T.text,overflowWrap:'anywhere'}}>{x.name}</div>}
+              {x.phone&&<a className="press" href={`tel:${tel}`} aria-label={`Call ${x.role} ${x.phone}`} style={{display:'inline-flex',alignItems:'center',gap:6,marginTop:x.name?3:0,color:T.text,textDecoration:'none',fontWeight:600,whiteSpace:'nowrap',touchAction:'manipulation'}}><span aria-hidden="true">☎</span><span>{x.phone}</span></a>}
+            </div>
+          </div>})}
+        </div>;
+      }
+      const vals=fields.map(([path,label])=>[label,String(getPath(initial,path)).trim()]).filter(([,v])=>v);if(!vals.length)return null;
+      return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}><div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>{vals.map(([label,value])=><div key={label} style={{display:'grid',gridTemplateColumns:isPhone?'minmax(0,42%) minmax(0,1fr)':'190px minmax(0,1fr)',gap:10,padding:'5px 0',fontSize:12}}><span style={{color:T.faint,minWidth:0}}>{label}</span><span style={{color:T.text,whiteSpace:'pre-wrap',minWidth:0,overflowWrap:'anywhere'}}>{value}</span></div>)}</div>
+    })}
     {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
       <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2025–2026 School History format and fills the form. You can edit anything before saving.</span></div>
