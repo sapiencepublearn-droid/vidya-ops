@@ -22,6 +22,14 @@ export const newActionKey = () =>
 export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
   let token = null;
   let employee = null;
+  // Keep the signed-in session across an accidental browser refresh/tab reload.
+  // sessionStorage is cleared when the browser session ends and is never used
+  // as a substitute for server-side token validation.
+  try {
+    token = sessionStorage?.getItem('sapience_auth_token') || null;
+    const saved = sessionStorage?.getItem('sapience_auth_employee');
+    employee = saved ? JSON.parse(saved) : null;
+  } catch { token = null; employee = null; }
 
   async function request(path, { method = 'GET', body, isForm, idempotencyKey } = {}) {
     const headers = {};
@@ -49,7 +57,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     if (!res.ok) {
       if (res.status === 401) {
         token = null; employee = null;
-        try { localStorage?.clear?.(); sessionStorage?.clear?.(); } catch { /* best effort */ }
+        try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
         onUnauthenticated?.(data?.error);
       }
       throw new ApiError(res.status, data?.error || 'error',
@@ -77,7 +85,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON error */ }
         if (res.status === 401) {
           token = null; employee = null;
-          try { localStorage?.clear?.(); sessionStorage?.clear?.(); } catch { /* best effort */ }
+          try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
           onUnauthenticated?.(data?.error);
         }
         throw new ApiError(res.status, data?.error || 'error', data?.message || 'Something went wrong.', data?.details, data?.requestId);
@@ -92,6 +100,10 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     async login(email, password) {
       const out = await request('/auth/login', { method: 'POST', body: { email, password } });
       token = out.token; employee = out.employee;
+      try {
+        sessionStorage?.setItem('sapience_auth_token', token);
+        sessionStorage?.setItem('sapience_auth_employee', JSON.stringify(employee));
+      } catch { /* best effort */ }
       return employee;
     },
     async logout() {
@@ -104,12 +116,14 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         // last one. API responses were never cached; this clears the shell
         // cache and any storage a future change might introduce.
         try {
+          sessionStorage?.removeItem('sapience_auth_token');
+          sessionStorage?.removeItem('sapience_auth_employee');
           if (typeof caches !== 'undefined') {
             const keys = await caches.keys();
             await Promise.all(keys.map((k) => caches.delete(k)));
           }
-          localStorage?.clear?.();
-          sessionStorage?.clear?.();
+          sessionStorage?.removeItem('sapience_auth_token');
+          sessionStorage?.removeItem('sapience_auth_employee');
         } catch { /* clearing is best effort; the session is already gone */ }
       }
     },

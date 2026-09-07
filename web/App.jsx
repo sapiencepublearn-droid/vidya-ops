@@ -235,6 +235,11 @@ export default function App() {
   }
   const api = client.current;
 
+  // Restore a valid session after a page refresh without bypassing server auth.
+  useEffect(() => {
+    if (api.session && !session) setSession(api.session);
+  }, [api, session]);
+
   return (
     <T_CTX.Provider value={T}>
       <API.Provider value={api}>

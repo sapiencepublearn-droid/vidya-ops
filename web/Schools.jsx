@@ -458,38 +458,81 @@ const splitContact = (value) => {
 
 function importSchoolHistoryTemplate(cells, current) {
   const out = JSON.parse(JSON.stringify(current || {}));
-  const set = (path, value) => { if (String(value).trim()) Object.assign(out, setPath(out, path, String(value).trim())); };
-  // The supplied Sapience 2025–2026 workbook is a labelled template. Values
-  // are read from the cells beside those labels; combined label:value cells are
-  // also supported for populated copies of the workbook.
-  set('location', excelText(cells,'B3'));
-  const vintageCell = excelText(cells,'C3');
-  const booksCell = excelText(cells,'D3');
-  const categoryCell = excelText(cells,'E3');
-  set('vintage', labelValue(vintageCell, 'VINTAGE') || (vintageCell ? vintageCell : ''));
-  set('books', labelValue(booksCell, 'BOOKS') || excelText(cells,'F3').replace(/^BOOKS\s*:\s*/i,''));
-  set('category', labelValue(categoryCell, 'CATEGORY') || excelText(cells,'F3').replace(/^CATEGORY\s*:\s*/i,''));
-  for (const [row, key, phoneKey] of [[6,'correspondent','correspondentPhone'],[7,'principal','principalPhone'],[8,'keyPerson','keyPersonPhone']]) {
-    const c = splitContact(excelText(cells,`D${row}`));
-    set(`contacts.${key}`, c.name); set(`contacts.${phoneKey}`, c.phone);
-  }
-  const map = {
-    B11:'booksPayment.lkg',B12:'booksPayment.ukg',B13:'booksPayment.discount',B14:'booksPayment.spInvoiceValue2526',D14:'booksPayment.spInvoiceValueAdditionalOrders',B15:'booksPayment.amountReceived',C15:'booksPayment.amountReceivedDate',B16:'booksPayment.amountPending',C16:'booksPayment.status',E16:'booksPayment.remarks',
-    B19:'deliverables1.teachersCopy',B20:'deliverables1.teachersManual1',B21:'deliverables1.teachersManual2',B22:'deliverables1.flashCards',
-    B24:'deliverables2.whatsapp',B26:'deliverables2.windowsApp.appVersion',C26:'deliverables2.windowsApp.date',D26:'deliverables2.windowsApp.lkg',E26:'deliverables2.windowsApp.ukg',F26:'deliverables2.windowsApp.systemTvBoth',B27:'deliverables2.kidsApp.appVersion',C27:'deliverables2.kidsApp.date',D27:'deliverables2.kidsApp.lkg',E27:'deliverables2.kidsApp.ukg',F27:'deliverables2.kidsApp.systemTvBoth',B28:'deliverables2.appComments',
-    B30:'deliverables3.questionPaper',B31:'deliverables3.progressCard',B33:'services.t1',B38:'services.t2',B39:'services.generalVisit',B40:'services.atu2',B41:'services.atu2Comments',B42:'services.sim2',B43:'services.sim2Comments',B44:'services.t3',B45:'services.sim3',B46:'services.sim3Comments',B47:'currentStatus',B48:'comments'
+  const set = (path, value) => {
+    const v = String(value ?? '').trim();
+    if (v) Object.assign(out, setPath(out, path, v));
   };
-  Object.entries(map).forEach(([ref,path])=>set(path, /\.date$/.test(path) || /Date$/.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref)));
-  return out;
-}
+  const clean = (value, label) => {
+    const v = String(value ?? '').trim();
+    if (!v) return '';
+    return v.replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
+  };
+  const first = (...refs) => refs.map(r => excelText(cells, r)).find(Boolean) || '';
 
+  // The supplied workbook stores labels in column A and the actual values
+  // beside them. Older populated copies may put "LABEL: value" in one cell,
+  // so both forms are supported.
+  const schoolName = clean(first('B2','A2'), 'School Name');
+  const location = clean(first('B3','A3'), 'LOCATION');
+  const vintage = clean(first('C3','D3'), 'VINTAGE');
+  const books = clean(first('D3','E3'), 'BOOKS');
+  const category = clean(first('E3','F3'), 'CATEGORY');
+  set('location', location);
+  set('vintage', vintage);
+  set('books', books);
+  set('category', category);
+
+  // Contacts are merged cells D6:F8 in the supplied template.
+  for (const [row, key, phoneKey] of [[6,'correspondent','correspondentPhone'],[7,'principal','principalPhone'],[8,'keyPerson','keyPersonPhone']]) {
+    const raw = first(`D${row}`, `B${row}`, `A${row}`);
+    const c = splitContact(raw);
+    set(`contacts.${key}`, c.name);
+    set(`contacts.${phoneKey}`, c.phone);
+  }
+
+  // Books & Payment: labels are in column A/C and values in adjacent cells.
+  const bookMap = {
+    B11:'booksPayment.lkg', B12:'booksPayment.ukg', B13:'booksPayment.discount',
+    B14:'booksPayment.spInvoiceValue2526', D14:'booksPayment.spInvoiceValueAdditionalOrders',
+    B15:'booksPayment.amountReceived', D15:'booksPayment.amountReceivedDate',
+    B16:'booksPayment.amountPending', D16:'booksPayment.status', E16:'booksPayment.remarks'
+  };
+  Object.entries(bookMap).forEach(([ref,path]) => {
+    const value = /Date$/i.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref);
+    set(path, value);
+  });
+
+  // Deliverables 1/3 use count + date columns. The existing application keeps
+  // the primary entry as the count/status value; populated copies therefore
+  // import the meaningful value without losing the rest of the history form.
+  const map = {
+    B19:'deliverables1.teachersCopy', B20:'deliverables1.teachersManual1',
+    B21:'deliverables1.teachersManual2', B22:'deliverables1.flashCards',
+    B24:'deliverables2.whatsapp',
+    B26:'deliverables2.windowsApp.appVersion', C26:'deliverables2.windowsApp.date',
+    D26:'deliverables2.windowsApp.lkg', E26:'deliverables2.windowsApp.ukg', F26:'deliverables2.windowsApp.systemTvBoth',
+    B27:'deliverables2.kidsApp.appVersion', C27:'deliverables2.kidsApp.date',
+    D27:'deliverables2.kidsApp.lkg', E27:'deliverables2.kidsApp.ukg', F27:'deliverables2.kidsApp.systemTvBoth',
+    B28:'deliverables2.appComments',
+    B30:'deliverables3.questionPaper', B31:'deliverables3.progressCard',
+    B33:'services.t1', B38:'services.t2', B39:'services.generalVisit', B40:'services.atu2',
+    B41:'services.atu2Comments', B42:'services.sim2', B43:'services.sim2Comments',
+    B44:'services.t3', B45:'services.sim3', B46:'services.sim3Comments',
+    B47:'currentStatus', B48:'comments'
+  };
+  Object.entries(map).forEach(([ref,path]) => {
+    const value = /\.date$/i.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref);
+    set(path, value);
+  });
+  return { out, schoolName };
+}
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [contactChoice,setContactChoice]=useState('');
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
   useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
   const save=async()=>{setBusy(true);setProblem(null);try{const out=await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);onSaved?.(out?.school_history || draft);}catch(e){setProblem(e);}finally{setBusy(false);}};
-  const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const excelSchool=excelText(cells,'A2');if(excelSchool && !/^school\s*name$/i.test(excelSchool) && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(importSchoolHistoryTemplate(cells,draft));}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
+  const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const imported=importSchoolHistoryTemplate(cells,draft);const excelSchool=imported.schoolName;if(excelSchool && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(imported.out);}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
   const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:40,padding:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub}}>
