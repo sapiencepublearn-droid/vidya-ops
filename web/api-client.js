@@ -134,10 +134,13 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
     submitTask: (id, body, key) => request(`/tasks/${id}/submit`, { method: 'POST', body, idempotencyKey: key }),
+    endDayTasks: (body, key) => request('/tasks/end-day', { method: 'POST', body, idempotencyKey: key }),
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
     createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),
     myContributions: () => request('/contributions/me'),
+    workDone: (from, to) => request(`/work-done/me${from || to ? `?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}` : ''}`),
+    saveWorkDone: (body, key) => request('/work-done/me', { method: 'PUT', body, idempotencyKey: key }),
     createContribution: (body, key) => request('/contributions', { method: 'POST', body, idempotencyKey: key }),
 
     async uploadFile(file) {
@@ -202,6 +205,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       latResults: (date) => request(`/admin/lat/results${date ? `?date=${date}` : ''}`),
       testReset: (key) => request('/admin/test/reset', { method: 'POST', body: { confirm: 'RESET ALL TEST DATA' }, idempotencyKey: key }),
       contributions: (status) => request(`/admin/contributions${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+      tasks: (date) => request(`/admin/tasks${date ? `?date=${encodeURIComponent(date)}` : ''}`),
       replyContribution: (id, body, key) => request(`/admin/contributions/${id}/reply`, { method: 'POST', body, idempotencyKey: key }),
     },
   };

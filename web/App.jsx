@@ -466,6 +466,7 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews
       <BroadcastCard T={T} broadcasts={broadcasts} onOpen={onOpenNews} />
 
       <PunchPanel T={T} api={api} att={att} role={profile.data?.role || me?.role} loading={attendance.loading} error={attendance.error}
+        todayTasks={tasks.data || []} onTasksDone={tasks.reload}
         onDone={attendance.reload} onRetryLoad={attendance.reload} M={M} Btn={Btn} />
 
       <LatCard T={T} lat={lat} onOpen={onOpenLat} />
@@ -735,7 +736,7 @@ function EContributions() {
   return (
     <div style={{ padding: '32px 24px 0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 28 }}>
-        <div><h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Contributions / Inconveniences</h1><div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>Additional work and invoices made for the company.</div></div>
+        <div><h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Contributions / Inconveniences</h1><div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>Additional contributions and inconveniences for the company.</div></div>
         <Btn onClick={() => setAdding(true)}>Add</Btn>
       </div>
       {data.loading ? <Rows n={4} />
@@ -746,7 +747,7 @@ function EContributions() {
                 const rs = replyMap.get(x.contribution_id) || [];
                 return <div key={x.contribution_id} style={{ padding: '15px 0', borderBottom: `1px solid ${T.line}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                    <div style={{ minWidth: 0 }}><M style={{ fontSize: 10, color: T.faint }}>{String(x.work_date).slice(0,10)}</M><div style={{ fontSize: 14, fontWeight: 500, marginTop: 5 }}>{x.title}</div><div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>{x.entry_type}{x.invoice_number ? ` · Invoice ${x.invoice_number}` : ''}</div></div>
+                    <div style={{ minWidth: 0 }}><M style={{ fontSize: 10, color: T.faint }}>{String(x.work_date).slice(0,10)}</M><div style={{ fontSize: 14, fontWeight: 500, marginTop: 5 }}>{x.title}</div><div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>{x.entry_type}</div></div>
                     <div style={{ textAlign: 'right', flexShrink: 0 }}>{x.amount_paise ? <M style={{ fontSize: 13 }}>{rupees(x.amount_paise)}</M> : null}<Status state={x.status === 'Replied' ? 'Completed' : 'Pending'} /></div>
                   </div>
                   <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.55, marginTop: 9 }}>{x.description}</div>
@@ -764,29 +765,27 @@ function ContributionForm({ onClose, onDone }) {
   const T = useT();
   const api = useApi();
   const key = useRef(newActionKey());
-  const [entryType, setEntryType] = useState('Additional Work');
+  const [entryType, setEntryType] = useState('Contribution');
   const [workDate, setWorkDate] = useState(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
   const incomplete = !workDate || !title.trim() || !description.trim();
   const submit = async () => {
     setBusy(true); setProblem(null);
     try {
-      await api.createContribution({ workDate, entryType, title: title.trim(), description: description.trim(), ...(invoiceNumber.trim() ? { invoiceNumber: invoiceNumber.trim() } : {}), ...(amount ? { amount: Number(amount) } : {}) }, key.current);
+      await api.createContribution({ workDate, entryType, title: title.trim(), description: description.trim() }, key.current);
       onDone();
     } catch (e) { setProblem(e); } finally { setBusy(false); }
   };
   return <div className="fade" style={{ position:'fixed', inset:0, background:T.overlay, display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:50 }}><div className="rise" style={{ width:'100%', maxWidth:420, background:T.bg, padding:28, borderTop:`1px solid ${T.line}`, maxHeight:'92vh', overflowY:'auto' }}>
     <div style={{ display:'flex', justifyContent:'space-between', marginBottom:24 }}><div className="tight" style={{fontSize:18,fontWeight:600}}>New contribution / inconvenience</div><button className="press" onClick={onClose} style={{background:'none',border:'none',color:T.faint,cursor:'pointer',fontSize:16}}>×</button></div>
-    <Field label="Type"><div style={{display:'flex',gap:8}}>{['Additional Work','Invoice'].map((x)=><button key={x} className="press" onClick={()=>setEntryType(x)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:`1px solid ${entryType===x?T.text:T.line}`,background:entryType===x?T.text:'transparent',color:entryType===x?T.bg:T.mute,fontSize:12}}>{x}</button>)}</div></Field>
+    <Field label="Type"><div style={{display:'flex',gap:8}}>{['Contribution','Inconvenience'].map((x)=><button key={x} className="press" onClick={()=>setEntryType(x)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:`1px solid ${entryType===x?T.text:T.line}`,background:entryType===x?T.text:'transparent',color:entryType===x?T.bg:T.mute,fontSize:12}}>{x}</button>)}</div></Field>
     <Field label="Date"><Input type="date" value={workDate} max={new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'})} onChange={e=>setWorkDate(e.target.value)} /></Field>
-    <Field label="Title"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder={entryType==='Invoice'?'Invoice made for company':'Additional work completed'} /></Field>
-    <Field label="Details"><textarea value={description} onChange={e=>setDescription(e.target.value)} placeholder="Explain what you did / what the invoice was for" rows={4} style={{width:'100%',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:14}} /></Field>
-    {entryType==='Invoice' && <><Field label="Invoice Number (Optional)"><Input value={invoiceNumber} onChange={e=>setInvoiceNumber(e.target.value)} /></Field><Field label="Amount (Optional)"><Input type="number" inputMode="decimal" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0" /></Field></>}
+    <Field label="Title"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder={entryType==='Inconvenience'?'Describe the inconvenience':'Describe the contribution'} /></Field>
+    <Field label="Details"><textarea value={description} onChange={e=>setDescription(e.target.value)} placeholder="Explain the additional contribution or inconvenience" rows={4} style={{width:'100%',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:14}} /></Field>
+
     {problem && <div style={{fontSize:13,color:T.accent,marginBottom:18}}>{problem.message}</div>}
     <div style={{display:'flex',gap:8}}><Btn variant="line" full onClick={onClose}>Cancel</Btn><Btn variant="accent" full busy={busy} disabled={incomplete} onClick={submit}>Submit</Btn></div>
   </div></div>;
@@ -1020,7 +1019,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [employeeDashboardId, setEmployeeDashboardId] = useState(null);
-  const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'LAT'], ['claims', 'Claims'], ['contributions', 'Contributions'], ['employees', 'Team'], ['audit', 'Audit'], ['tools', 'Tools']];
+  const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['tasks', 'Daily Work'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'LAT'], ['claims', 'Claims'], ['contributions', 'Contributions'], ['employees', 'Team'], ['audit', 'Audit'], ['tools', 'Tools']];
 
   const body = (
     <main key={page} className="rise" style={{
@@ -1031,6 +1030,7 @@ function Admin({ me, onOut, theme, setTheme }) {
       {page === 'dashboard' && !employeeDashboardId && <ADash isPhone={isPhone} onEmployee={(id) => setEmployeeDashboardId(id)} />}
       {page === 'dashboard' && employeeDashboardId && <EmployeeDashboard employeeId={employeeDashboardId} isPhone={isPhone} onBack={() => setEmployeeDashboardId(null)} />}
       {page === 'attendance' && <AAttendance isPhone={isPhone} />}
+      {page === 'tasks' && <ATasks isPhone={isPhone} />}
       {page === 'schools' && <ASchools isPhone={isPhone} />}
       {page === 'news' && <ANews isPhone={isPhone} />}
       {page === 'words' && <AWords isPhone={isPhone} />}
@@ -1364,15 +1364,17 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
       <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
         {card('Claims', fmtMoney(summary.claimsTotal), `${summary.claimCount} claims`)}
         <button className="press" onClick={() => setDetail(detail === 'contributions' ? null : 'contributions')} style={{ padding: 0, border: 0, textAlign: 'left', background: 'none', color: T.text, cursor: 'pointer' }} aria-label="View Contributions / Inconveniences">
-          {card('Contributions / Inconveniences', summary.contributionsCount || 0, `${fmtMoney(summary.contributionInvoiceTotal || 0)} invoices · click to view`)}
+          {card('Contributions / Inconveniences', summary.contributionsCount || 0, `${summary.contributionsCount || 0} entries · click to view`)}
         </button>
-        {card('Work Done', summary.tasksCompleted, `${summary.tasksAssigned} assigned`)}
+        <button className="press" onClick={() => setDetail(detail === 'workdone' ? null : 'workdone')} style={{ padding: 0, border: 0, textAlign: 'left', background: 'none', color: T.text, cursor: 'pointer' }} aria-label="View Work Done">
+          {card('Work Done', summary.tasksAssigned || 0, `${summary.tasksCompleted || 0} completed · ${Math.max(0, (summary.tasksAssigned || 0) - (summary.tasksCompleted || 0))} pending · click to view`)}
+        </button>
         {card('LAT', summary.latCompleted ? `${summary.latScore}/${summary.latPossible}` : '—', `${summary.latCompleted}/${summary.latAttempts} completed`)}
       </div>
 
       {detail === 'contributions' && (
         <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, marginBottom: 28, background: T.sub }}>
-          <div style={{ marginBottom: 12 }}><Eyebrow>Contributions / Inconveniences</Eyebrow><div style={{ fontSize: 12, color: T.mute, marginTop: -4 }}>Additional work and company invoices, shown day by day.</div></div>
+          <div style={{ marginBottom: 12 }}><Eyebrow>Contributions / Inconveniences</Eyebrow><div style={{ fontSize: 12, color: T.mute, marginTop: -4 }}>Contributions and inconveniences, shown day by day.</div></div>
           {(() => {
             const byDay = new Map();
             (report.data?.contributions || []).forEach((x) => { const k = dayKey(x.work_date); byDay.set(k, [...(byDay.get(k) || []), x]); });
@@ -1381,7 +1383,7 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
             return rows.length ? rows.map(([day, items]) => (
               <div key={day} style={{ padding: '11px 0', borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} entries</div>
-                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span>{x.amount_paise ? <M style={{fontSize:11}}>{fmtMoney(x.amount_paise)}</M> : null}</div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type}{x.invoice_number ? ` · Invoice ${x.invoice_number}` : ''} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
+                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span>{x.amount_paise ? <M style={{fontSize:11}}>{fmtMoney(x.amount_paise)}</M> : null}</div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
               </div>
             )) : <div style={{ fontSize: 12, color: T.mute, paddingTop: 4 }}>No contributions / inconveniences in this period.</div>;
           })()}
@@ -1392,21 +1394,25 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
         <div style={{ border: `1px solid ${T.line}`, borderRadius: 10, padding: 16, marginBottom: 28, background: T.sub }}>
           <div style={{ marginBottom: 12 }}>
             <Eyebrow>Work Done</Eyebrow>
-            <div style={{ fontSize: 12, color: T.mute, marginTop: -4 }}>Completed work, shown day by day</div>
+            <div style={{ fontSize: 12, color: T.mute, marginTop: -4 }}>All assigned work, shown day by day. Completed items are marked done; unfinished items carry forward to the next day.</div>
           </div>
           {(() => {
-            const completed = tasks.filter((t) => t.effective_status === 'Completed');
             const byDay = new Map();
-            completed.forEach((t) => { const k = dayKey(t.due_date); byDay.set(k, [...(byDay.get(k) || []), t]); });
+            (tasks || []).forEach((t) => { const k = dayKey(t.due_date); byDay.set(k, [...(byDay.get(k) || []), t]); });
+            (workDone || []).forEach((w) => { const k = dayKey(w.work_date); byDay.set(k, [...(byDay.get(k) || []), { ...w, _manual: true }]); });
             const rows = Array.from(byDay.entries()).sort((a,b) => b[0].localeCompare(a[0]));
             return rows.length ? rows.map(([day, items]) => (
               <div key={day} style={{ padding: '11px 0', borderTop: `1px solid ${T.line}` }}>
-                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} completed</div>
-                <div style={{ display: 'grid', gap: 5 }}>
-                  {items.map((t) => <div key={t.task_id} style={{ fontSize: 11, color: T.mute }}><span style={{ color: T.text }}>{t.title}</span>{t.task_code ? ` · ${t.task_code}` : ''}</div>)}
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} items</div>
+                <div style={{ display: 'grid', gap: 7 }}>
+                  {items.map((t, i) => t._manual ? (
+                    <div key={`manual-${t.work_done_id || i}`} style={{ fontSize: 11, color: T.mute }}><span style={{ color: T.text }}>Work note</span> · {t.summary || t.description || t.work_text || '—'}</div>
+                  ) : (
+                    <div key={t.task_id} style={{ display:'flex',justifyContent:'space-between',gap:10,fontSize:11 }}><span style={{ color: T.text }}>{t.title}</span><span style={{ color: t.effective_status === 'Completed' ? T.text : T.faint }}>{t.effective_status === 'Completed' ? 'Completed' : 'Pending'}</span></div>
+                  ))}
                 </div>
               </div>
-            )) : <div style={{ fontSize: 12, color: T.mute, paddingTop: 4 }}>No completed work in this period.</div>;
+            )) : <div style={{ fontSize: 12, color: T.mute, paddingTop: 4 }}>No work assigned or recorded in this period.</div>;
           })()}
         </div>
       )}
@@ -1936,9 +1942,9 @@ function AContributions({ isPhone }) {
     finally { setBusy(false); }
   };
   return <>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:24}}><div><h1 className="tight" style={{fontSize:24,fontWeight:600,margin:0}}>Contributions / Inconveniences</h1><div style={{fontSize:13,color:T.mute,marginTop:6}}>Additional work and invoices submitted by employees.</div></div></div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:24}}><div><h1 className="tight" style={{fontSize:24,fontWeight:600,margin:0}}>Contributions / Inconveniences</h1><div style={{fontSize:13,color:T.mute,marginTop:6}}>Additional contributions and inconveniences submitted by employees.</div></div></div>
     <div style={{display:'flex',gap:8,marginBottom:24}}>{['All','Open','Replied'].map(x=><button key={x} className="press" onClick={()=>setFilter(x)} style={{padding:'8px 12px',borderRadius:8,border:`1px solid ${filter===x?T.text:T.line}`,background:filter===x?T.text:'transparent',color:filter===x?T.bg:T.mute,fontSize:12}}>{x}</button>)}</div>
-    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}>{x.amount_paise ? <M style={{fontSize:13}}>{rupees(x.amount_paise)}</M> : null}<div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{x.invoice_number&&<M style={{fontSize:11,color:T.faint,display:'block',marginTop:5}}>Invoice: {x.invoice_number}</M>}{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
+    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}>{x.amount_paise ? <M style={{fontSize:13}}>{rupees(x.amount_paise)}</M> : null}<div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
     {replyFor && <div className="fade" style={{position:'fixed',inset:0,background:T.overlay,display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:50}}><div className="rise" style={{width:'100%',maxWidth:520,background:T.bg,padding:24,borderTop:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:18}}><div className="tight" style={{fontSize:18,fontWeight:600}}>Reply to employee</div><button className="press" onClick={()=>setReplyFor(null)} style={{background:'none',border:'none',color:T.faint,fontSize:16}}>×</button></div><Field label="Reply"><textarea autoFocus rows={5} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Write a clear response or acknowledgement…" style={{width:'100%',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:14}} /></Field><div style={{display:'flex',gap:8}}><Btn variant="line" full onClick={()=>setReplyFor(null)}>Cancel</Btn><Btn variant="accent" full busy={busy} disabled={!reply.trim()} onClick={sendReply}>Send Reply</Btn></div></div></div>}
   </>;
 }
@@ -1971,6 +1977,60 @@ function ATools({ isPhone }) {
       </div>
     </>
   );
+}
+
+
+function ATasks({ isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const staff = useResource(() => api.admin.employees(), []);
+  const [date, setDate] = useState(today);
+  const [assignedTo, setAssignedTo] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState('Medium');
+  const [dueTime, setDueTime] = useState('18:00');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const rows = useResource(() => api.admin.tasks(date), [date]);
+
+  const save = async () => {
+    if (!assignedTo || !title.trim() || !date) return;
+    setBusy(true); setProblem(null);
+    try {
+      await api.admin.createTask({ title: title.trim(), description: description.trim() || null, assignedTo, priority, dueDate: date, dueTime });
+      setTitle(''); setDescription(''); setPriority('Medium'); setDueTime('18:00');
+      await rows.reload();
+    } catch (e) { setProblem(e); }
+    finally { setBusy(false); }
+  };
+
+  return <>
+    <div style={{ marginBottom: 28 }}>
+      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 7px' }}>Daily Work</h1>
+      <div style={{ fontSize: 13, color: T.mute }}>Admin and CEO can assign work to an employee for a specific day.</div>
+    </div>
+
+    <div style={{ border: `1px solid ${T.line}`, borderRadius: 12, padding: 18, background: T.sub, marginBottom: 30 }}>
+      <Eyebrow>Assign Work</Eyebrow>
+      <div style={{ display:'grid', gridTemplateColumns:isPhone?'1fr':'1fr 1fr', gap:12 }}>
+        <Field label="Employee"><select value={assignedTo} onChange={e=>setAssignedTo(e.target.value)} style={{width:'100%',padding:'11px 12px',borderRadius:8,border:`1px solid ${T.line}`,background:T.bg,color:T.text,fontSize:13}}><option value="">Select employee</option>{(staff.data||[]).filter(e=>e.status==='Active').map(e=><option key={e.employee_id} value={e.employee_id}>{e.name} · {e.role}</option>)}</select></Field>
+        <Field label="Date"><Input type="date" value={date} onChange={e=>setDate(e.target.value)} /></Field>
+      </div>
+      <Field label="Work"><Input value={title} onChange={e=>setTitle(e.target.value)} placeholder="What needs to be done?" /></Field>
+      <Field label="Details (Optional)"><textarea rows={3} value={description} onChange={e=>setDescription(e.target.value)} placeholder="Add instructions, expected outcome or context…" style={{width:'100%',boxSizing:'border-box',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:13}} /></Field>
+      <div style={{display:'grid',gridTemplateColumns:isPhone?'1fr 1fr':'1fr 1fr',gap:12}}>
+        <Field label="Priority"><select value={priority} onChange={e=>setPriority(e.target.value)} style={{width:'100%',padding:'11px 12px',borderRadius:8,border:`1px solid ${T.line}`,background:T.bg,color:T.text,fontSize:13}}>{['Low','Medium','High','Urgent'].map(x=><option key={x}>{x}</option>)}</select></Field>
+        <Field label="Expected by"><Input type="time" value={dueTime} onChange={e=>setDueTime(e.target.value)} /></Field>
+      </div>
+      {problem && <div style={{fontSize:13,color:T.accent,marginBottom:12}}>{problem.message}</div>}
+      <Btn variant="solid" disabled={!assignedTo || !title.trim()} busy={busy} onClick={save}>Assign Work</Btn>
+    </div>
+
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12,marginBottom:14}}><Eyebrow>Work Assigned for {dateText(date)}</Eyebrow><M style={{fontSize:11,color:T.faint}}>{rows.data?.length || 0} items</M></div>
+    {rows.loading ? <Rows n={5} /> : rows.error ? <ErrorBlock error={rows.error} onRetry={rows.reload} /> : !rows.data?.length ? <Blank title="No work assigned for this date" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{rows.data.map(t=><div key={t.task_id} style={{padding:'14px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:14}}><div><div style={{fontSize:14,fontWeight:500}}>{t.title}</div><M style={{fontSize:11,color:T.faint,display:'block',marginTop:5}}>{t.employee_name} · {t.employee_code} · {t.priority}</M></div><Status state={t.status}/></div>{t.description&&<div style={{fontSize:12,color:T.mute,marginTop:7,lineHeight:1.5}}>{t.description}</div>}<M style={{fontSize:11,color:T.faint,display:'block',marginTop:7}}>By {t.assigner_name} · Due {to12(t.due_time)}</M></div>)}</div>}
+  </>;
 }
 
 function AEmployees({ isPhone }) {

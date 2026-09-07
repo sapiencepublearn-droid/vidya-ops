@@ -50,13 +50,15 @@ function messageFor(e) {
   }
 }
 
-export function PunchPanel({ T, api, att, role, loading, error, onDone, onRetryLoad, M, Btn }) {
+export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [], onTasksDone, onDone, onRetryLoad, M, Btn }) {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(null);
   const [problem, setProblem] = useState(null);
   const [result, setResult] = useState(null);     // punch-in or punch-out response
   const [reporting, setReporting] = useState(false);
   const [reported, setReported] = useState(false);
+  const [endDayOpen, setEndDayOpen] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
   const fieldRole = role === 'Trainer' || role === 'Technical Support';
   const isTrainer = role === 'Trainer';
   // Held across retries of one tap, so a lost response cannot double-punch.
@@ -86,6 +88,24 @@ export function PunchPanel({ T, api, att, role, loading, error, onDone, onRetryL
       setProblem({ ...e, code: e.code, status: e.status, mode });
     } finally {
       setBusy(false); setStage(null);
+    }
+  };
+
+  const openEndDay = () => {
+    setSelectedTaskIds([]);
+    setEndDayOpen(true);
+  };
+
+  const confirmEndDay = async () => {
+    if (busy) return;
+    setBusy(true); setProblem(null); setEndDayOpen(false);
+    try {
+      await api.endDayTasks({ completedTaskIds: selectedTaskIds }, newActionKey());
+      onTasksDone?.();
+      await punch('out');
+    } catch (e) {
+      setProblem({ ...e, code: e.code, status: e.status, mode: 'out' });
+      setBusy(false);
     }
   };
 
@@ -157,10 +177,11 @@ export function PunchPanel({ T, api, att, role, loading, error, onDone, onRetryL
         </M>
 
         {isTrainer && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
-        <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('out')}
-          label="Punch Out" variant="line" />
+        <BigButton T={T} busy={busy} stage={stage} onClick={openEndDay}
+          label="End Day" variant="line" />
         <Problem T={T} problem={problem} reported={reported} reporting={reporting}
           onRetry={() => punch(problem.mode)} onReport={report} Btn={Btn} M={M} />
+        {endDayOpen && <EndDayChecklist T={T} tasks={todayTasks} selectedTaskIds={selectedTaskIds} setSelectedTaskIds={setSelectedTaskIds} busy={busy} onCancel={() => setEndDayOpen(false)} onConfirm={confirmEndDay} />}
       </div>
     );
   }
@@ -179,6 +200,31 @@ export function PunchPanel({ T, api, att, role, loading, error, onDone, onRetryL
         onRetry={() => punch(problem.mode)} onReport={report} Btn={Btn} M={M} />
     </div>
   );
+}
+
+function EndDayChecklist({ T, tasks, selectedTaskIds, setSelectedTaskIds, busy, onCancel, onConfirm }) {
+  const toggle = (id) => setSelectedTaskIds((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
+  return <div className="fade" style={{ position:'fixed', inset:0, background:T.overlay, display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:60 }}>
+    <div className="rise" style={{ width:'100%', maxWidth:420, background:T.bg, padding:24, borderTop:`1px solid ${T.line}`, maxHeight:'88vh', overflowY:'auto' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8 }}>
+        <div className="tight" style={{ fontSize:20, fontWeight:600 }}>End Day</div>
+        <button className="press" onClick={onCancel} style={{background:'none',border:'none',color:T.faint,fontSize:18,cursor:'pointer'}}>×</button>
+      </div>
+      <div style={{ fontSize:13, color:T.mute, lineHeight:1.55, marginBottom:20 }}>Select the work you completed today. Anything you leave unchecked will remain pending and move to tomorrow.</div>
+      {!tasks.length ? <div style={{padding:'14px 0',fontSize:13,color:T.mute,borderTop:`1px solid ${T.line}`,borderBottom:`1px solid ${T.line}`,marginBottom:20}}>No work assigned for today.</div> : <div style={{borderTop:`1px solid ${T.line}`,marginBottom:20}}>{tasks.map(t=>{
+        const checked=selectedTaskIds.includes(t.task_id);
+        return <button key={t.task_id} type="button" className="press" onClick={()=>toggle(t.task_id)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,textAlign:'left',padding:'14px 0',background:'none',border:'none',borderBottom:`1px solid ${T.line}`,color:T.text,cursor:'pointer'}}>
+          <span style={{width:22,height:22,borderRadius:6,border:`1px solid ${checked?T.text:T.line}`,background:checked?T.text:'transparent',color:checked?T.bg:'transparent',display:'grid',placeItems:'center',fontSize:14,flex:'0 0 auto'}}>{checked?'✓':''}</span>
+          <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:500}}>{t.title}</span><span style={{display:'block',fontSize:11,color:T.faint,marginTop:4}}>{t.priority} · due {t.due_time ? String(t.due_time).slice(0,5) : '—'}</span></span>
+        </button>;
+      })}</div>}
+      <div style={{display:'flex',gap:8}}><BtnLike T={T} onClick={onCancel}>Cancel</BtnLike><BtnLike T={T} solid busy={busy} onClick={onConfirm}>{busy?'Ending Day…':'Check Out & End Day'}</BtnLike></div>
+    </div>
+  </div>;
+}
+
+function BtnLike({ T, children, onClick, solid, busy }) {
+  return <button className="press" onClick={onClick} disabled={busy} style={{flex:1,padding:'13px 12px',borderRadius:9,border:solid?'none':`1px solid ${T.line}`,background:solid?T.text:'transparent',color:solid?T.bg:T.text,fontSize:13,fontWeight:500,cursor:busy?'wait':'pointer'}}>{children}</button>;
 }
 
 /** Large, unmissable, and disabled while a request is in flight. */

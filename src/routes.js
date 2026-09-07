@@ -74,11 +74,9 @@ const employeeSchema = z.object({
 
 const contributionSchema = z.object({
   workDate: isoDate,
-  entryType: z.enum(['Additional Work', 'Invoice']),
+  entryType: z.enum(['Contribution', 'Inconvenience']),
   title: z.string().trim().min(1).max(160),
   description: z.string().trim().min(1).max(3000),
-  invoiceNumber: z.string().trim().max(120).optional().nullable(),
-  amount: z.number().positive().max(10000000).multipleOf(0.01).optional().nullable(),
 }).strict();
 
 const contributionReplySchema = z.object({
@@ -864,6 +862,34 @@ router.get('/tasks/me', wrap(async (req, res) => {
   res.json(rows);
 }));
 
+
+router.post('/tasks/end-day', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({ completedTaskIds: z.array(uuid).max(100).default([]) }).strict(), req.body);
+  const completed = await tx(req.user, async (c) => {
+    const today = (await c.query(
+      `SELECT task_id, status FROM tasks
+         WHERE assigned_to=$1 AND due_date=ist_today() AND deleted_at IS NULL
+         ORDER BY due_time, created_at`, [req.user.id])).rows;
+    const allowed = new Set(today.map((t) => t.task_id));
+    const selected = f.completedTaskIds.filter((id) => allowed.has(id));
+    if (selected.length) {
+      await c.query(
+        `UPDATE tasks SET status='Completed', completed_at=now(), updated_at=now()
+           WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2 AND due_date=ist_today() AND deleted_at IS NULL`,
+        [selected, req.user.id]);
+    }
+    const pending = today.filter((t) => !selected.includes(t.task_id));
+    if (pending.length) {
+      await c.query(
+        `UPDATE tasks SET due_date=due_date+1, updated_at=now()
+           WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2 AND due_date=ist_today() AND deleted_at IS NULL`,
+        [pending.map((t) => t.task_id), req.user.id]);
+    }
+    return { completedTaskIds: selected, carriedTaskIds: pending.map((t) => t.task_id) };
+  });
+  res.json(completed);
+})));
+
 router.get('/tasks/:id', uuidParam('id'), wrap(async (req, res) => {
   const out = await tx(req.user, async (c) => {
     const t = (await c.query(`SELECT * FROM v_tasks WHERE task_id = $1`, [req.params.id])).rows[0];
@@ -875,6 +901,23 @@ router.get('/tasks/:id', uuidParam('id'), wrap(async (req, res) => {
   });
   if (!out) throw notFound('That task does not exist.');
   res.json(out);
+}));
+
+
+router.get('/admin/tasks', adminOnly, wrap(async (req, res) => {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : null;
+  if (!date) throw unprocessable('Choose a valid date.', 'invalid_date');
+  const { rows } = await pool.query(
+    `SELECT t.task_id, t.task_code, t.title, t.description, t.priority, t.due_date, t.due_time,
+            t.status, t.started_at, t.submitted_at, t.completed_at,
+            e.employee_id, e.name AS employee_name, e.employee_code,
+            a.name AS assigner_name
+       FROM tasks t
+       JOIN employees e ON e.employee_id=t.assigned_to
+       JOIN employees a ON a.employee_id=t.assigned_by
+      WHERE t.due_date=$1 AND t.deleted_at IS NULL
+      ORDER BY e.name, t.due_time, t.created_at`, [date]);
+  res.json(rows);
 }));
 
 router.post('/tasks', adminOnly, wrap(async (req, res) => {
@@ -1019,11 +1062,10 @@ router.post('/contributions', idempotent(wrap(async (req, res) => {
   const row = await tx(req.user, async (c) => {
     const out = (await c.query(
       `INSERT INTO employee_contributions
-         (employee_id, work_date, entry_type, title, description, invoice_number, amount_paise)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+         (employee_id, work_date, entry_type, title, description)
+       VALUES ($1,$2,$3,$4,$5)
        RETURNING *`,
-      [req.user.id, f.workDate, f.entryType, f.title, f.description,
-       f.invoiceNumber || null, f.amount == null ? null : Math.round(f.amount * 100)])).rows[0];
+      [req.user.id, f.workDate, f.entryType, f.title, f.description])).rows[0];
     await notifyAdmins(c, {
       kind: 'contribution',
       body: `${req.user.name || 'An employee'} submitted ${f.entryType.toLowerCase()}: ${f.title}`,
@@ -1037,8 +1079,7 @@ router.post('/contributions', idempotent(wrap(async (req, res) => {
 router.get('/contributions/me', wrap(async (req, res) => {
   const { rows } = await tx(req.user, async (c) => {
     const items = (await c.query(
-      `SELECT contribution_id, work_date, entry_type, title, description, invoice_number,
-              amount_paise, status, created_at
+      `SELECT contribution_id, work_date, entry_type, title, description, status, created_at
          FROM employee_contributions
         WHERE employee_id=$1
         ORDER BY work_date DESC, created_at DESC`, [req.user.id])).rows;
@@ -1148,7 +1189,7 @@ router.get('/admin/contributions', adminOnly, wrap(async (req, res) => {
   const out = await tx(req.user, async (c) => {
     const items = (await c.query(
       `SELECT c.contribution_id, c.work_date, c.entry_type, c.title, c.description,
-              c.invoice_number, c.amount_paise, c.status, c.created_at,
+              c.status, c.created_at,
               e.employee_id, e.employee_code, e.name AS employee_name
          FROM employee_contributions c
          JOIN employees e ON e.employee_id=c.employee_id
@@ -1533,8 +1574,7 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         ORDER BY claim_date DESC, created_at DESC`, [req.params.id, from, to])).rows;
 
     const contributions = (await c.query(
-      `SELECT contribution_id, work_date, entry_type, title, description, invoice_number,
-              amount_paise, status, created_at
+      `SELECT contribution_id, work_date, entry_type, title, description, status, created_at
          FROM employee_contributions
         WHERE employee_id=$1 AND work_date BETWEEN $2::date AND $3::date
         ORDER BY work_date DESC, created_at DESC`, [req.params.id, from, to])).rows;
@@ -1562,7 +1602,6 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
     const claimsTotal = claims.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
     const localTotal = claims.filter((c) => c.expense_type === 'Local').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
     const outstationTotal = claims.filter((c) => c.expense_type === 'Outstation').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
-    const contributionInvoiceTotal = contributions.filter((c) => c.entry_type === 'Invoice').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
 
     return {
       employee,
@@ -1588,7 +1627,6 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         latScore: latAttempts.reduce((sum, a) => sum + Number(a.score || 0), 0),
         latPossible: latAttempts.reduce((sum, a) => sum + Number(a.total || 0), 0),
         contributionsCount: contributions.length,
-        contributionInvoiceTotal,
       },
       attendance,
       schoolVisits,
