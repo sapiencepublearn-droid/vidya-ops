@@ -793,12 +793,12 @@ function ClaimForm({ caps, onClose, onDone }) {
   const submit = async () => {
     setBusy(true); setProblem(null);
     try {
-      // The bill is uploaded first so the claim can reference it. The
-      // server rejects a claim whose attachment is missing or reused.
-      const uploaded = await api.uploadFile(file);
+      // Bill upload is optional. A claim can be submitted without a bill.
+      const uploaded = file ? await api.uploadFile(file) : null;
       await api.createClaim({
         date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
-        expenseType, category, amount: Number(amount), attachmentId: uploaded.attachment_id,
+        expenseType, category, amount: Number(amount),
+        ...(uploaded?.attachment_id ? { attachmentId: uploaded.attachment_id } : {}),
         ...(category === 'Travel' ? { place: place.trim() } : {}),
         ...(category === 'Stay' ? { location: location.trim() } : {}),
         ...(category === 'Others' ? { note: note.trim() } : {}),
@@ -811,7 +811,7 @@ function ClaimForm({ caps, onClose, onDone }) {
     }
   };
 
-  const incomplete = !expenseType || !file || !amount || Number(amount) <= 0
+  const incomplete = !expenseType || !amount || Number(amount) <= 0
     || (category === 'Travel' && !place.trim())
     || (category === 'Stay' && !location.trim())
     || (category === 'Others' && !note.trim());
@@ -850,9 +850,9 @@ function ClaimForm({ caps, onClose, onDone }) {
           </div>
         </Field>
 
-        <Field label="Bill">
+        <Field label="Bill (Optional)">
           <label className="press" style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '10px 12px', borderRadius: 8, border: `1px dashed ${file ? T.line : T.accent}`, color: file ? T.text : T.mute, cursor: 'pointer', fontSize: 14 }}>
-            {file ? file.name : 'Upload bill'}
+            {file ? file.name : 'Upload bill (optional)'}
             <input type="file" accept="image/*,application/pdf" style={{ display: 'none' }}
               onChange={(e) => { setFile(e.target.files?.[0] || null); setProblem(null); }} />
           </label>
