@@ -156,6 +156,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       dashboard: () => request('/admin/dashboard'),
       employees: () => request('/admin/employees'),
       createEmployee: (body) => request('/admin/employees', { method: 'POST', body }),
+      updateEmployee: (id, body) => request(`/admin/employees/${id}`, { method: 'PATCH', body }),
       createTask: (body) => request('/tasks', { method: 'POST', body }),
       claims: ({ status, cycle } = {}) => {
         const qs = new URLSearchParams();
@@ -167,6 +168,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       claimCycles: () => request('/admin/claims/cycles'),
       reviewClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/review`, { method: 'POST', idempotencyKey: key }),
       closeClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/close`, { method: 'POST', idempotencyKey: key }),
+      clearClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/clear`, { method: 'POST', body: { confirm: 'CLEAR' }, idempotencyKey: key }),
       exportClaims: async (cycle) => {
         const blob = await requestBlob(`/admin/claims/cycles/${cycle}/export.xls`);
         const url = URL.createObjectURL(blob);
@@ -192,6 +194,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       publishBroadcast: (body, key) => request('/admin/broadcasts', { method: 'POST', body, idempotencyKey: key }),
       publishWords: (words, date) => request('/admin/lat/sets', { method: 'POST', body: { words, ...(date ? { date } : {}) } }),
       latResults: (date) => request(`/admin/lat/results${date ? `?date=${date}` : ''}`),
+      testReset: (key) => request('/admin/test/reset', { method: 'POST', body: { confirm: 'RESET ALL TEST DATA' }, idempotencyKey: key }),
     },
   };
 }
