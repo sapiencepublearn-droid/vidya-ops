@@ -388,6 +388,7 @@ function Login({ onIn, expired, theme, setTheme }) {
 function Employee({ me, onOut, theme, setTheme }) {
   const T = useT();
   const api = useApi();
+  const isPhone = useIsPhone();
   const [tab, setTab] = useState('home');
   const [openTask, setOpenTask] = useState(null);
   const [latOpen, setLatOpen] = useState(false);
@@ -439,7 +440,7 @@ function Employee({ me, onOut, theme, setTheme }) {
       </header>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 57px)' }}>
-        <aside style={{
+        {!isPhone && <aside style={{
           width: 220, flexShrink: 0, borderRight: `1px solid ${T.line}`, padding: '24px 14px',
           display: 'flex', flexDirection: 'column', gap: 4, position: 'sticky', top: 57, height: 'calc(100vh - 57px)', boxSizing: 'border-box',
         }}>
@@ -451,7 +452,7 @@ function Employee({ me, onOut, theme, setTheme }) {
               {label}
             </button>;
           })}
-        </aside>
+        </aside>}
 
         <main style={{ flex: 1, minWidth: 0, maxWidth: 1100, margin: '0 auto', width: '100%' }}>
           {content}
@@ -1127,7 +1128,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   const body = (
     <main key={page} className="rise" style={{
       flex: 1, minWidth: 0,
-      padding: isPhone ? '24px 20px 92px' : '48px 48px',
+      padding: isPhone ? '24px 20px 32px' : '48px 48px',
       maxWidth: isPhone ? '100%' : 1100,
     }}>
       {page === 'dashboard' && !employeeDashboardId && <ADash isPhone={isPhone} onEmployee={(id) => setEmployeeDashboardId(id)} />}
@@ -1145,9 +1146,7 @@ function Admin({ me, onOut, theme, setTheme }) {
     </main>
   );
 
-  // On a phone the sidebar becomes bottom navigation, the same pattern the
-  // employee app uses. A fixed 210px rail beside wide tables is what made
-  // the page scroll sideways.
+  // On phones the navigation is an off-canvas sidebar so content keeps the full viewport width.
   if (isPhone) {
     return (
       <div style={{ minHeight: '100vh', maxWidth: '100%', overflowX: 'hidden' }}>
