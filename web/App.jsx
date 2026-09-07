@@ -398,7 +398,7 @@ function Employee({ me, onOut, theme, setTheme }) {
 
   const nav = [
     ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
-    ['contributions', 'Contributions'], ['workdone', 'Work Done'],
+    ['contributions', 'Contributions'],
     ...(profile.data?.claims_enabled ? [['claims', 'Claims']] : []),
     ['profile', 'Profile'],
   ];
@@ -417,7 +417,6 @@ function Employee({ me, onOut, theme, setTheme }) {
                   : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
                     : tab === 'claims' ? <EClaims profile={profile} />
                     : tab === 'contributions' ? <EContributions />
-                    : tab === 'workdone' ? <EWorkDone />
                     : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} onOpenNews={() => setNewsOpen(true)} />}
         </div>
 
@@ -680,67 +679,6 @@ function ELat({ lat, onOpen }) {
   );
 }
 
-function EWorkDone() {
-  const T = useT();
-  const api = useApi();
-  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  const [date, setDate] = useState(today);
-  const [summary, setSummary] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState(null);
-  const [saved, setSaved] = useState(false);
-  const data = useResource(() => api.workDone(date, date), [date]);
-
-  useEffect(() => {
-    setSaved(false);
-    setProblem(null);
-    const existing = data.data?.[0];
-    setSummary(existing?.summary || '');
-  }, [data.data]);
-
-  const save = async () => {
-    if (!summary.trim() || date > today) return;
-    setBusy(true); setProblem(null); setSaved(false);
-    try {
-      await api.saveWorkDone({ workDate: date, summary: summary.trim() }, newActionKey());
-      await data.reload();
-      setSaved(true);
-    } catch (e) { setProblem(e); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div style={{ padding: '32px 24px 0' }}>
-      <div style={{ marginBottom: 28 }}>
-        <h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Work Done</h1>
-        <div style={{ fontSize: 12, color: T.mute, marginTop: 7 }}>Update what you actually completed on a specific day. This is separate from assigned work.</div>
-      </div>
-
-      <Field label="Date"><Input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} /></Field>
-      {data.loading ? <Rows n={2} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : (
-        <>
-          <Field label="Work Done">
-            <textarea rows={7} value={summary} onChange={(e) => { setSummary(e.target.value); setSaved(false); }}
-              placeholder="Write what you actually completed, important follow-ups, school work, office work, or other contributions for this day…"
-              style={{ width:'100%', boxSizing:'border-box', padding:12, border:`1px solid ${T.line}`, borderRadius:8, background:T.bg, color:T.text, resize:'vertical', fontSize:14, lineHeight:1.5 }} />
-          </Field>
-          {problem && <div style={{ fontSize:13, color:T.accent, marginBottom:14 }}>{problem.message}</div>}
-          {saved && <div style={{ fontSize:12, color:T.mute, marginBottom:14 }}>Work Done updated for {istDateShort(date)}.</div>}
-          <Btn variant="accent" full busy={busy} disabled={!summary.trim()} onClick={save}>{data.data?.length ? 'Update Work Done' : 'Save Work Done'}</Btn>
-        </>
-      )}
-
-      <div style={{ marginTop: 36, marginBottom: 40 }}>
-        <Eyebrow>Recent entries</Eyebrow>
-        {(() => {
-          const recent = data.data || [];
-          return recent.length ? recent.map((x) => <div key={x.work_done_id} style={{ padding:'13px 0', borderTop:`1px solid ${T.line}` }}><div style={{ fontSize:12, fontWeight:500 }}>{istDateShort(x.work_date)}</div><div style={{ fontSize:12, color:T.mute, lineHeight:1.5, marginTop:5 }}>{x.summary}</div></div>) : <Blank title="No Work Done recorded for this date" />;
-        })()}
-      </div>
-    </div>
-  );
-}
-
 function EAttendance({ profile }) {
   const T = useT();
   const api = useApi();
@@ -811,7 +749,7 @@ function EContributions() {
                 return <div key={x.contribution_id} style={{ padding: '15px 0', borderBottom: `1px solid ${T.line}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                     <div style={{ minWidth: 0 }}><M style={{ fontSize: 10, color: T.faint }}>{String(x.work_date).slice(0,10)}</M><div style={{ fontSize: 14, fontWeight: 500, marginTop: 5 }}>{x.title}</div><div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>{x.entry_type}</div></div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}><Status state={x.status === 'Replied' ? 'Completed' : 'Pending'} /></div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>{x.amount_paise ? <M style={{ fontSize: 13 }}>{rupees(x.amount_paise)}</M> : null}<Status state={x.status === 'Replied' ? 'Completed' : 'Pending'} /></div>
                   </div>
                   <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.55, marginTop: 9 }}>{x.description}</div>
                   {rs.map((r) => <div key={r.reply_id} style={{ marginTop: 10, padding: '10px 12px', borderLeft: `2px solid ${T.line}`, background: T.sub }}><div style={{ fontSize: 10, color: T.faint }}>{r.author_name} · {istTime(r.created_at)}</div><div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{r.message}</div></div>)}
@@ -877,11 +815,11 @@ function EClaims({ profile }) {
             <div style={{ marginBottom: 36 }}>
               <Eyebrow>Claimed</Eyebrow>
               <div className="tight" style={{ fontSize: 34, fontWeight: 600, lineHeight: 1 }}>{rupees(total)}</div>
-              {pending > 0 && <div style={{ fontSize: 12, color: T.accent, marginTop: 10 }}>{rupees(pending)} in the current weekly review</div>}
+              {pending > 0 && <div style={{ fontSize: 12, color: T.accent, marginTop: 10 }}>{rupees(pending)} awaiting approval</div>}
             </div>
 
             <Eyebrow>History</Eyebrow>
-            {!claims.data.length ? <Blank title="No claims yet" hint="Add the expense details; a bill is optional." />
+            {!claims.data.length ? <Blank title="No claims yet" hint="Add one with a photo of the bill." />
               : <div style={{ borderTop: `1px solid ${T.line}` }}>
                 {claims.data.map((c) => (
                   <div key={c.claim_id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
@@ -1446,7 +1384,7 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
             return rows.length ? rows.map(([day, items]) => (
               <div key={day} style={{ padding: '11px 0', borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} entries</div>
-                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span></div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
+                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span>{x.amount_paise ? <M style={{fontSize:11}}>{fmtMoney(x.amount_paise)}</M> : null}</div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
               </div>
             )) : <div style={{ fontSize: 12, color: T.mute, paddingTop: 4 }}>No contributions / inconveniences in this period.</div>;
           })()}
@@ -1764,7 +1702,7 @@ function AClaims({ isPhone }) {
               <div key={c.cycle_start} style={{ padding: '16px 0', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 220 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{cycleLabelFor(c)}</div>
-                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>{c.bill_count} expense entries · {rupees(c.total_paise)}</M>
+                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>{c.bill_count} bills · {rupees(c.total_paise)}</M>
                 </div>
                 <button className="press" disabled={!!acting} onClick={() => exportAndClearCycle(c.cycle_start)} style={{
                   padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg,
@@ -1803,7 +1741,7 @@ function AClaims({ isPhone }) {
             {selectedEmployee.employee_name}
           </h1>
           <div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>
-            {employeeClaims.length} expense {employeeClaims.length === 1 ? 'entry' : 'entries'}
+            {employeeClaims.length} bill{employeeClaims.length === 1 ? '' : 's'}
           </div>
         </div>
 
@@ -1918,7 +1856,7 @@ function AClaims({ isPhone }) {
 
       {claims.loading ? <Rows n={5} />
         : claims.error ? <ErrorBlock error={claims.error} onRetry={claims.reload} />
-          : !activeCycle ? <Blank title="No claim cycles yet" hint="Weekly claims will appear here once expenses are submitted." />
+          : !activeCycle ? <Blank title="No claim cycles yet" hint="Weekly claims will appear here once bills are submitted." />
           : (
             <>
               <div style={{
@@ -1939,7 +1877,7 @@ function AClaims({ isPhone }) {
                   }}>Employees</div>
                   <div className="tight" style={{ fontSize: 22, fontWeight: 600 }}>{employees.length}</div>
                   <div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>
-                    {cycleClaims.length} expense {cycleClaims.length === 1 ? 'entry' : 'entries'}
+                    {cycleClaims.length} bill{cycleClaims.length === 1 ? '' : 's'}
                   </div>
                 </div>
               </div>
@@ -1960,7 +1898,7 @@ function AClaims({ isPhone }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 14, fontWeight: 500 }}>{e.employee_name}</div>
                           <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>
-                            {e.bill_count} expense {e.bill_count === 1 ? 'entry' : 'entries'}
+                            {e.bill_count} bill{e.bill_count === 1 ? '' : 's'}
                           </M>
                         </div>
                         <div style={{ textAlign: 'right', minWidth: isPhone ? 92 : 240 }}>
@@ -2007,7 +1945,7 @@ function AContributions({ isPhone }) {
   return <>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:24}}><div><h1 className="tight" style={{fontSize:24,fontWeight:600,margin:0}}>Contributions / Inconveniences</h1><div style={{fontSize:13,color:T.mute,marginTop:6}}>Additional contributions and inconveniences submitted by employees.</div></div></div>
     <div style={{display:'flex',gap:8,marginBottom:24}}>{['All','Open','Replied'].map(x=><button key={x} className="press" onClick={()=>setFilter(x)} style={{padding:'8px 12px',borderRadius:8,border:`1px solid ${filter===x?T.text:T.line}`,background:filter===x?T.text:'transparent',color:filter===x?T.bg:T.mute,fontSize:12}}>{x}</button>)}</div>
-    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}><div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
+    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}>{x.amount_paise ? <M style={{fontSize:13}}>{rupees(x.amount_paise)}</M> : null}<div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
     {replyFor && <div className="fade" style={{position:'fixed',inset:0,background:T.overlay,display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:50}}><div className="rise" style={{width:'100%',maxWidth:520,background:T.bg,padding:24,borderTop:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:18}}><div className="tight" style={{fontSize:18,fontWeight:600}}>Reply to employee</div><button className="press" onClick={()=>setReplyFor(null)} style={{background:'none',border:'none',color:T.faint,fontSize:16}}>×</button></div><Field label="Reply"><textarea autoFocus rows={5} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Write a clear response or acknowledgement…" style={{width:'100%',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:14}} /></Field><div style={{display:'flex',gap:8}}><Btn variant="line" full onClick={()=>setReplyFor(null)}>Cancel</Btn><Btn variant="accent" full busy={busy} disabled={!reply.trim()} onClick={sendReply}>Send Reply</Btn></div></div></div>}
   </>;
 }

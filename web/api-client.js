@@ -134,7 +134,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
     submitTask: (id, body, key) => request(`/tasks/${id}/submit`, { method: 'POST', body, idempotencyKey: key }),
-    endDay: (body, key) => request('/attendance/end-day', { method: 'POST', body, idempotencyKey: key }),
+    endDayTasks: (body, key) => request('/tasks/end-day', { method: 'POST', body, idempotencyKey: key }),
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
     createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),

@@ -856,26 +856,10 @@ router.post('/admin/incidents/:id/resolve', uuidParam('id'), adminOnly, idempote
 
 /* ────────────────────────────────────────────────────────────── tasks */
 
-async function recordTaskDailyLog(c, employeeId, todayTasks, selectedTaskIds) {
-  const selected = new Set(selectedTaskIds);
-  const values = todayTasks.map((t) => ({
-    taskId: t.task_id,
-    outcome: t.status === 'Completed' || selected.has(t.task_id) ? 'Completed' : 'Pending',
-  }));
-  for (const v of values) {
-    await c.query(
-      `INSERT INTO task_daily_log (task_id, employee_id, work_date, outcome)
-       VALUES ($1,$2,ist_today(),$3)
-       ON CONFLICT (task_id, work_date)
-       DO UPDATE SET outcome=EXCLUDED.outcome, recorded_at=now()`,
-      [v.taskId, employeeId, v.outcome]);
-  }
-}
-
 router.get('/tasks/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
   const views = {
-    today: `t.due_date = ist_today()`,
+    today: `t.due_date = ist_today() AND t.effective_status <> 'Completed'`,
     upcoming: `t.due_date > ist_today()`,
     completed: `t.status = 'Completed'`,
     overdue: `t.effective_status = 'Overdue'`,
@@ -888,87 +872,31 @@ router.get('/tasks/me', wrap(async (req, res) => {
 }));
 
 
-/**
- * End-of-day is one atomic action: the employee selects completed work and
- * punches out in the same database transaction. If GPS validation or the
- * punch-out fails, no task is completed or carried forward.
- */
-router.post('/attendance/end-day', idempotent(wrap(async (req, res) => {
-  const f = parse(fixSchema.extend({ completedTaskIds: z.array(uuid).max(100).default([]) }).strict(), req.body);
-  const emp = (await tx(req.user, (c) => c.query(
-    `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
-  if (!emp) throw notFound('Your employee account does not exist.');
-
-  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
-  const cleanFix = anywhere ? validateFieldFix(f) : validateOpenFix(f);
-  const sites = anywhere ? [] : await permittedSites(req.user);
-  const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
-  const { site, distance } = matched;
-
-  const out = await tx(req.user, async (c) => {
-    if (emp.role === 'Trainer') {
-      const openVisit = (await c.query(
-        `SELECT visit_id FROM school_visits
-          WHERE employee_id=$1 AND work_date=ist_today()
-            AND check_in_time IS NOT NULL AND check_out_time IS NULL
-          LIMIT 1`, [req.user.id])).rows[0];
-      if (openVisit) throw conflict('Please check out from the school visit before ending your day.', 'school_visit_open');
-    }
-
-    const attendance = (await c.query(
-      `SELECT attendance_id, check_in_time, check_out_time
-         FROM attendance
-        WHERE employee_id=$1 AND work_date=ist_today()
-        FOR UPDATE`, [req.user.id])).rows[0];
-    if (!attendance?.check_in_time) throw conflict('You have not checked in today.', 'not_checked_in');
-    if (attendance.check_out_time) throw conflict('You have already checked out today.', 'already_checked_out');
-
-    const todayTasks = (await c.query(
-      `SELECT task_id, status
-         FROM tasks
-        WHERE assigned_to=$1 AND due_date=ist_today() AND deleted_at IS NULL
-        ORDER BY due_time, created_at`, [req.user.id])).rows;
-    const allowed = new Set(todayTasks.map((t) => t.task_id));
+router.post('/tasks/end-day', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({ completedTaskIds: z.array(uuid).max(100).default([]) }).strict(), req.body);
+  const completed = await tx(req.user, async (c) => {
+    const today = (await c.query(
+      `SELECT task_id, status FROM tasks
+         WHERE assigned_to=$1 AND due_date=ist_today() AND deleted_at IS NULL
+         ORDER BY due_time, created_at`, [req.user.id])).rows;
+    const allowed = new Set(today.map((t) => t.task_id));
     const selected = f.completedTaskIds.filter((id) => allowed.has(id));
     if (selected.length) {
       await c.query(
-        `UPDATE tasks
-            SET status='Completed', completed_at=COALESCE(completed_at, now()), updated_at=now()
-          WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2
-            AND due_date=ist_today() AND deleted_at IS NULL`,
+        `UPDATE tasks SET status='Completed', completed_at=now(), updated_at=now()
+           WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2 AND due_date=ist_today() AND deleted_at IS NULL`,
         [selected, req.user.id]);
     }
-
-    await recordTaskDailyLog(c, req.user.id, todayTasks, selected);
-    const pending = todayTasks.filter((t) => t.status !== 'Completed' && !selected.includes(t.task_id));
+    const pending = today.filter((t) => !selected.includes(t.task_id));
     if (pending.length) {
       await c.query(
         `UPDATE tasks SET due_date=due_date+1, updated_at=now()
-          WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2
-            AND due_date=ist_today() AND deleted_at IS NULL`,
+           WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2 AND due_date=ist_today() AND deleted_at IS NULL`,
         [pending.map((t) => t.task_id), req.user.id]);
     }
-
-    const row = (await c.query(
-      `UPDATE attendance
-          SET check_out_time=now(), check_out_latitude=$2, check_out_longitude=$3,
-              check_out_accuracy=$4, check_out_location_id=$5, check_out_distance_m=$6, check_out_device=$7
-        WHERE attendance_id=$1
-        RETURNING *`,
-      [attendance.attendance_id, f.latitude, f.longitude, f.accuracy, site?.id ?? null, distance, f.device ?? {}])).rows[0];
-
-    return {
-      attendance: row,
-      completedTaskIds: selected,
-      carriedTaskIds: pending.map((t) => t.task_id),
-      locationType: site ? (site.kind === 'office' ? 'OFFICE' : 'SCHOOL') : 'ANYWHERE',
-      location: site?.name ?? 'Field / Any location',
-      zone: site?.zone ?? null,
-      distanceMetres: distance,
-    };
+    return { completedTaskIds: selected, carriedTaskIds: pending.map((t) => t.task_id) };
   });
-
-  res.json(out);
+  res.json(completed);
 })));
 
 router.get('/tasks/:id', uuidParam('id'), wrap(async (req, res) => {
@@ -1015,6 +943,27 @@ router.put('/work-done/me', idempotent(wrap(async (req, res) => {
      ON CONFLICT (employee_id, work_date)
      DO UPDATE SET summary=EXCLUDED.summary, updated_at=now()
      RETURNING *`, [req.user.id, f.workDate, f.summary])).then((r) => r.rows[0]);
+  res.json(row);
+})));
+
+/* Daily Work Done: employee-authored daily notes. */
+router.get('/work-done/me', wrap(async (req, res) => {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : null;
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT work_done_id, work_date, summary, created_at, updated_at FROM employee_work_done
+      WHERE employee_id=$1 AND ($2::date IS NULL OR work_date >= $2::date) AND ($3::date IS NULL OR work_date <= $3::date)
+      ORDER BY work_date DESC`, [req.user.id, from, to]));
+  res.json(rows);
+}));
+router.put('/work-done/me', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({ workDate: isoDate, summary: z.string().trim().min(1).max(5000) }).strict(), req.body);
+  const today = (await pool.query(`SELECT ist_today() AS d`)).rows[0].d;
+  if (f.workDate > today.toISOString().slice(0, 10)) throw unprocessable('You cannot record Work Done for a future date.', 'future_date');
+  const row = await tx(req.user, (c) => c.query(
+    `INSERT INTO employee_work_done (employee_id, work_date, summary) VALUES ($1,$2,$3)
+     ON CONFLICT (employee_id, work_date) DO UPDATE SET summary=EXCLUDED.summary, updated_at=now() RETURNING *`,
+    [req.user.id, f.workDate, f.summary])).then((r) => r.rows[0]);
   res.json(row);
 })));
 
@@ -1675,22 +1624,10 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         ORDER BY v.work_date DESC, v.check_in_time DESC`, [req.params.id, from, to])).rows;
 
     const tasks = (await c.query(
-      `SELECT task_id, task_code, title, work_date AS due_date, due_time,
-              outcome AS status, NULL::timestamptz AS started_at,
-              NULL::timestamptz AS submitted_at, NULL::timestamptz AS completed_at,
-              outcome AS effective_status
-         FROM task_daily_log l
-         JOIN tasks t ON t.task_id=l.task_id
-        WHERE l.employee_id=$1 AND l.work_date BETWEEN $2::date AND $3::date
-        UNION ALL
-       SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time, t.status,
-              t.started_at, t.submitted_at, t.completed_at, t.effective_status
-         FROM v_tasks t
-        WHERE t.assigned_to=$1 AND t.due_date BETWEEN $2::date AND $3::date
-          AND NOT EXISTS (
-            SELECT 1 FROM task_daily_log l
-             WHERE l.task_id=t.task_id AND l.work_date=t.due_date
-          )
+      `SELECT task_id, task_code, title, due_date, due_time, status, started_at, submitted_at, completed_at,
+              effective_status
+         FROM v_tasks
+        WHERE assigned_to=$1 AND due_date BETWEEN $2::date AND $3::date
         ORDER BY due_date DESC, due_time DESC`, [req.params.id, from, to])).rows;
 
     const claims = (await c.query(

@@ -63,7 +63,6 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
   const isTrainer = role === 'Trainer';
   // Held across retries of one tap, so a lost response cannot double-punch.
   const actionKey = useRef(null);
-  const endDayActionKey = useRef(null);
 
   const reasonFor = (e) => ({
     outside_radius: 'outside_radius', poor_accuracy: 'poor_accuracy',
@@ -93,10 +92,7 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
   };
 
   const openEndDay = () => {
-    // Tasks already completed during the day are shown as checked and locked.
-    // Pending work starts unchecked and is carried forward when the employee
-    // ends the day.
-    setSelectedTaskIds((todayTasks || []).filter((t) => t.effective_status === 'Completed' || t.status === 'Completed').map((t) => t.task_id));
+    setSelectedTaskIds([]);
     setEndDayOpen(true);
   };
 
@@ -104,21 +100,12 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
     if (busy) return;
     setBusy(true); setProblem(null); setEndDayOpen(false);
     try {
-      if (!endDayActionKey.current) endDayActionKey.current = newActionKey();
-      setStage('Getting location…');
-      const fix = await readFix();
-      setStage(fieldRole ? 'Checking out and saving today’s work…' : 'Checking attendance location…');
-      const out = await api.endDay({ completedTaskIds: selectedTaskIds, ...fix }, endDayActionKey.current);
-      endDayActionKey.current = null;
+      await api.endDayTasks({ completedTaskIds: selectedTaskIds }, newActionKey());
       onTasksDone?.();
-      setResult({ mode: 'out', ...out });
-      await onDone();
+      await punch('out');
     } catch (e) {
       setProblem({ ...e, code: e.code, status: e.status, mode: 'out' });
-      // The server performs task updates and punch-out atomically, so a failed
-      // punch-out leaves today's task state unchanged.
-    } finally {
-      setBusy(false); setStage(null);
+      setBusy(false);
     }
   };
 
@@ -216,10 +203,7 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
 }
 
 function EndDayChecklist({ T, tasks, selectedTaskIds, setSelectedTaskIds, busy, onCancel, onConfirm }) {
-  const toggle = (task) => {
-    if (task.status === 'Completed' || task.effective_status === 'Completed') return;
-    setSelectedTaskIds((cur) => cur.includes(task.task_id) ? cur.filter((x) => x !== task.task_id) : [...cur, task.task_id]);
-  };
+  const toggle = (id) => setSelectedTaskIds((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]);
   return <div className="fade" style={{ position:'fixed', inset:0, background:T.overlay, display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:60 }}>
     <div className="rise" style={{ width:'100%', maxWidth:420, background:T.bg, padding:24, borderTop:`1px solid ${T.line}`, maxHeight:'88vh', overflowY:'auto' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8 }}>
@@ -229,9 +213,9 @@ function EndDayChecklist({ T, tasks, selectedTaskIds, setSelectedTaskIds, busy, 
       <div style={{ fontSize:13, color:T.mute, lineHeight:1.55, marginBottom:20 }}>Select the work you completed today. Anything you leave unchecked will remain pending and move to tomorrow.</div>
       {!tasks.length ? <div style={{padding:'14px 0',fontSize:13,color:T.mute,borderTop:`1px solid ${T.line}`,borderBottom:`1px solid ${T.line}`,marginBottom:20}}>No work assigned for today.</div> : <div style={{borderTop:`1px solid ${T.line}`,marginBottom:20}}>{tasks.map(t=>{
         const checked=selectedTaskIds.includes(t.task_id);
-        return <button key={t.task_id} type="button" className="press" onClick={()=>toggle(t)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,textAlign:'left',padding:'14px 0',background:'none',border:'none',borderBottom:`1px solid ${T.line}`,color:T.text,cursor:(t.status === 'Completed' || t.effective_status === 'Completed')?'default':'pointer'}}>
+        return <button key={t.task_id} type="button" className="press" onClick={()=>toggle(t.task_id)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,textAlign:'left',padding:'14px 0',background:'none',border:'none',borderBottom:`1px solid ${T.line}`,color:T.text,cursor:'pointer'}}>
           <span style={{width:22,height:22,borderRadius:6,border:`1px solid ${checked?T.text:T.line}`,background:checked?T.text:'transparent',color:checked?T.bg:'transparent',display:'grid',placeItems:'center',fontSize:14,flex:'0 0 auto'}}>{checked?'✓':''}</span>
-          <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:500}}>{t.title}</span><span style={{display:'block',fontSize:11,color:T.faint,marginTop:4}}>{t.status === 'Completed' || t.effective_status === 'Completed' ? 'Completed' : `${t.priority} · due ${t.due_time ? String(t.due_time).slice(0,5) : '—'}`}</span></span>
+          <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:500}}>{t.title}</span><span style={{display:'block',fontSize:11,color:T.faint,marginTop:4}}>{t.priority} · due {t.due_time ? String(t.due_time).slice(0,5) : '—'}</span></span>
         </button>;
       })}</div>}
       <div style={{display:'flex',gap:8}}><BtnLike T={T} onClick={onCancel}>Cancel</BtnLike><BtnLike T={T} solid busy={busy} onClick={onConfirm}>{busy?'Ending Day…':'Check Out & End Day'}</BtnLike></div>
@@ -353,10 +337,9 @@ function SchoolVisitPanel({ T, api, M, Btn }) {
 /* ─────────────────────────────────────────── completed attendance */
 
 function Completed({ T, att, result, M, Btn, label }) {
-  const finalAtt = result?.attendance || att;
-  const type = result?.locationType || finalAtt?.location_type;
-  const place = result?.location || finalAtt?.site_name;
-  const zone = result?.zone || finalAtt?.site_zone;
+  const type = result?.locationType || att?.location_type;
+  const place = result?.location || att?.site_name;
+  const zone = result?.zone || att?.site_zone;
   const draft = result?.visitDraft || null;
 
   return (
@@ -368,12 +351,12 @@ function Completed({ T, att, result, M, Btn, label }) {
 
       <div style={{ display: 'grid', gap: 12, marginBottom: 24 }}>
         {[
-          ['Date', istDay(finalAtt?.work_date)],
+          ['Date', istDay(att?.work_date)],
           [type === 'SCHOOL' ? 'School' : 'Location', place || '—'],
           ...(type === 'SCHOOL' && zone ? [['Zone', zone]] : []),
-          ['Punch In', istTime(finalAtt?.check_in_time)],
-          ['Punch Out', istTime(finalAtt?.check_out_time)],
-          ['Status', finalAtt?.status || '—'],
+          ['Punch In', istTime(att?.check_in_time)],
+          ['Punch Out', istTime(att?.check_out_time)],
+          ['Status', att?.status || '—'],
         ].map(([k, v]) => (
           <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 14 }}>
             <span style={{ color: T.mute }}>{k}</span>
