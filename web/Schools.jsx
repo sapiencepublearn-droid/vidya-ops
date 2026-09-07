@@ -370,11 +370,19 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 const historySections = [
   ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
-  ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.lkgRemarks','LKG — Remarks'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.ukgRemarks','UKG — Remarks'], ['booksPayment.discount','Discount — Initial Count'], ['booksPayment.discountAdditionalOrders','Discount — Additional Orders'], ['booksPayment.discountReturns','Discount — Returns'], ['booksPayment.discountRemarks','Discount — Remarks'], ['booksPayment.spInvoiceValue2526','SP Invoice Value (25-26)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (Additional Orders)'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']]],
-  ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual 1 — Count'], ['deliverables1.teachersManual1Date','Teachers Manual 1 — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Cards — Count'], ['deliverables1.flashCardsDate','Flash Cards — Date']]],
-  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App / Kids App Comments']]],
+  ['Books & Payment', [
+    ['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'],
+    ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'],
+    ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.lkgHhpAdditionalOrders','LKG — HHP Additional Orders'], ['booksPayment.lkgHhpReturns','LKG — HHP Returns'],
+    ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.ukgHhpAdditionalOrders','UKG — HHP Additional Orders'], ['booksPayment.ukgHhpReturns','UKG — HHP Returns'],
+    ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.creditNote','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.paymentMode','Payment Mode'],
+    ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAo','SP Invoice Value (AO)'], ['booksPayment.spInvoiceValue2526Total','25-26 Total'],
+    ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']
+  ]],
+  ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual — Count'], ['deliverables1.teachersManual1Date','Teachers Manual — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Card — Count'], ['deliverables1.flashCardsDate','Flash Card — Date']]],
+  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.count','Kids App — Count'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','App Comments']]],
   ['Deliverables 3', [['deliverables3.questionPaper','Question Paper — Count'], ['deliverables3.questionPaperDate','Question Paper — Date'], ['deliverables3.progressCard','Progress Card — Count'], ['deliverables3.progressCardDate','Progress Card — Date']]],
-  ['Services', [['services.t1','T1'], ['services.t2','T2'], ['services.generalVisit','General Visit'], ['services.atu2','ATU 2'], ['services.atu2Comments','ATU 2 Comments'], ['services.sim2','SIM 2'], ['services.sim2Comments','SIM 2 Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Comments','SIM 3 Comments']]],
+  ['Services', [['services.t1','T1'], ['services.atu1','ATU 1'], ['services.atu1Comments','ATU 1 Comments'], ['services.sim1','SIM 1'], ['services.sim1Comments','SIM 1 Comments'], ['services.t2','T2'], ['services.generalVisit','General Visit'], ['services.atu2','ATU 2'], ['services.atu2Comments','ATU 2 Comments'], ['services.sim2','SIM 2'], ['services.sim2Comments','SIM 2 Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Comments','SIM 3 Comments']]],
   ['Current status', [['currentStatus','Current Status'], ['comments','Comments']]],
 ];
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
@@ -406,10 +414,9 @@ async function readXlsxFiles(file) {
     if (readU32(view, i) === 0x06054b50) { eocd = i; break; }
   }
   if (eocd < 0) throw new Error('The Excel file could not be read.');
-  const count = readU16(view, eocd + 10), cdSize = readU32(view, eocd + 12), cdOffset = readU32(view, eocd + 16);
+  const count = readU16(view, eocd + 10), cdOffset = readU32(view, eocd + 16);
   const entries = new Map(); let off = cdOffset;
-  const bytes = new Uint8Array(buffer);
-  const decoder = new TextDecoder();
+  const bytes = new Uint8Array(buffer), decoder = new TextDecoder();
   for (let i = 0; i < count; i++) {
     if (readU32(view, off) !== 0x02014b50) throw new Error('Invalid Excel archive.');
     const method = readU16(view, off + 10), compressedSize = readU32(view, off + 20), nameLen = readU16(view, off + 28), extraLen = readU16(view, off + 30), commentLen = readU16(view, off + 32), localOffset = readU32(view, off + 42);
@@ -417,206 +424,112 @@ async function readXlsxFiles(file) {
     entries.set(name, { method, compressedSize, localOffset });
     off += 46 + nameLen + extraLen + commentLen;
   }
-  const get = async (name) => {
-    const entry = entries.get(name); if (!entry) return null;
-    return new TextDecoder().decode(await unzipEntry(buffer, entry));
-  };
+  const get = async (name) => { const entry=entries.get(name); if(!entry)return null; return new TextDecoder().decode(await unzipEntry(buffer,entry)); };
   const sharedXml = await get('xl/sharedStrings.xml');
-  const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si => Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
-
-  // Resolve the worksheet by workbook metadata instead of assuming Sheet1.
-  // Real school files often have an extra cover/instructions sheet first.
-  const workbookXml = await get('xl/workbook.xml');
-  const relsXml = await get('xl/_rels/workbook.xml.rels');
-  const workbookDoc = workbookXml ? new DOMParser().parseFromString(workbookXml,'application/xml') : null;
-  const relsDoc = relsXml ? new DOMParser().parseFromString(relsXml,'application/xml') : null;
-  const relMap = {};
-  relsDoc?.querySelectorAll('Relationship').forEach(r => relMap[r.getAttribute('Id')] = r.getAttribute('Target'));
-  const sheets = Array.from(workbookDoc?.querySelectorAll('sheet') || []);
-  let chosen = null;
-  for (const sh of sheets) {
-    const name = normExcel(sh.getAttribute('name'));
-    const target = relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')];
-    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : '';
-    if (/school\s*name|school\s*history/i.test(name) || /school\s*history/i.test(path)) { chosen = { name, path }; break; }
-  }
-  if (!chosen) {
-    const sh = sheets[0];
-    const target = sh ? (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]) : null;
-    chosen = { name: normExcel(sh?.getAttribute('name') || 'Sheet1'), path: target ? (target.startsWith('/') ? target.slice(1) : `xl/${target}`) : 'xl/worksheets/sheet1.xml' };
-  }
-  const sheetXml = await get(chosen.path || 'xl/worksheets/sheet1.xml');
-  if (!sheetXml) throw new Error('The School History worksheet could not be read.');
-  const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
-  const cells = {};
-  doc.querySelectorAll('sheetData > row > c').forEach(c => {
-    const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
-    let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
-    if (type === 's') value = shared[Number(value)] ?? '';
-    if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
-    cells[ref] = String(value).trim();
-  });
-  return { cells, sheetName: chosen.name };
+  const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si=>Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
+  const workbookXml = await get('xl/workbook.xml'), relsXml = await get('xl/_rels/workbook.xml.rels');
+  const workbookDoc=workbookXml?new DOMParser().parseFromString(workbookXml,'application/xml'):null, relsDoc=relsXml?new DOMParser().parseFromString(relsXml,'application/xml'):null;
+  const relMap={}; relsDoc?.querySelectorAll('Relationship').forEach(r=>relMap[r.getAttribute('Id')]=r.getAttribute('Target'));
+  const sheets=Array.from(workbookDoc?.querySelectorAll('sheet')||[]);
+  const targetFor=(sh)=>{const target=relMap[sh?.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')]||relMap[sh?.getAttribute('r:id')]; return target?(target.startsWith('/')?target.slice(1):`xl/${target.replace(/^\//,'')}`):'';};
+  let chosen=sheets.map(sh=>({name:normExcel(sh.getAttribute('name')||''),path:targetFor(sh)})).find(x=>/school\s*(name|history)|school\s*history/i.test(x.name)||/school\s*history/i.test(x.path));
+  if(!chosen) chosen=sheets.map(sh=>({name:normExcel(sh.getAttribute('name')||''),path:targetFor(sh)}))[0]||{name:'Sheet1',path:'xl/worksheets/sheet1.xml'};
+  const sheetXml=await get(chosen.path); if(!sheetXml)throw new Error('The School History worksheet could not be read.');
+  const doc=new DOMParser().parseFromString(sheetXml,'application/xml'), cells={};
+  doc.querySelectorAll('sheetData > row > c').forEach(c=>{const ref=c.getAttribute('r'),type=c.getAttribute('t'),v=c.querySelector('v'),inline=c.querySelector('is');let value=inline?Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join(''):(v?.textContent||'');if(type==='s')value=shared[Number(value)]??'';if(type==='b')value=value==='1'?'TRUE':'FALSE';cells[ref]=String(value).trim();});
+  return {cells,sheetName:chosen.name};
 }
 
-const excelText = (cells, ref) => String(cells[ref] ?? '').trim();
-const normExcel = (v) => String(v ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-const labelValue = (value, label) => normExcel(value).replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
-const excelDateText = (value) => {
-  const raw = normExcel(value);
-  if (!raw) return '';
-  if (/^\d+(?:\.\d+)?$/.test(raw)) {
-    const serial = Number(raw);
-    if (serial > 20000 && serial < 80000) {
-      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
-      return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`;
-    }
-  }
-  return raw;
-};
-const splitContact = (value) => {
-  const raw = normExcel(value);
-  const phone = (raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/) || [])[0] || '';
-  const name = phone ? raw.replace(phone, '').replace(/[|–—-]+\s*$/,'').trim() : raw;
-  return { name, phone: phone.trim() };
-};
+const excelText=(cells,ref)=>String(cells[ref]??'').trim();
+const normExcel=(v)=>String(v??'').replace(/\u00a0/g,' ').replace(/\s+/g,' ').trim();
+const excelDateText=(value)=>{const raw=normExcel(value);if(!raw)return '';if(/^\d+(?:\.\d+)?$/.test(raw)){const serial=Number(raw);if(serial>20000&&serial<80000){const d=new Date(Date.UTC(1899,11,30)+serial*86400000);return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`;}}const m=raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);if(m)return `${String(Number(m[2])).padStart(2,'0')}/${String(Number(m[1])).padStart(2,'0')}/${m[3]}`;return raw;};
+const cleanExcelLabel=(v)=>normExcel(v).replace(/[:：]$/,'').replace(/\s+/g,' ').toLowerCase();
+const stripExcelLabel=(v)=>normExcel(v).replace(/^\s*[^:：]+[:：]\s*/,'').trim();
+const isBlankExcel=(v)=>{const x=normExcel(v).toLowerCase();return !x||x==='-'||x==='—'||x==='nil';};
 
-// The School History workbook is a form, not a database export. In real files
-// users may insert rows, move columns, or have merged cells. Therefore the
-// importer is label/header driven: it finds the row containing a field name,
-// then reads the value under the matching header. It does NOT rely on a fixed
-// "B19 means Teachers Copy" assumption. This prevents values such as STATUS or
-// another row's date from being attached to the preceding field.
-function importSchoolHistoryTemplate(cells, current) {
-  const out = JSON.parse(JSON.stringify(current || {}));
-  const entries = Object.entries(cells).map(([ref, value]) => {
-    const m = ref.match(/^([A-Z]+)(\d+)$/); if (!m) return null;
-    let col = 0; for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
-    return { ref, row: Number(m[2]), col, value: normExcel(value) };
-  }).filter(Boolean);
-  const byRef = new Map(entries.map(x => [x.ref, x]));
-  const rows = new Map();
-  for (const x of entries) { if (!rows.has(x.row)) rows.set(x.row, []); rows.get(x.row).push(x); }
-  for (const r of rows.values()) r.sort((a,b)=>a.col-b.col);
+// IMPORTANT: This importer is deliberately row-semantic for the supplied
+// School History workbook. The workbook is a form with special rows such as
+// DELIVERY DATE, DISCOUNT, SP INVOICE VALUE (MO), and a second DELIVERABLES 2
+// header. Generic "find the next value" logic caused STATUS/PAYMENT MODE/date
+// values to shift into the previous field. We now identify each semantic row,
+// then read only the columns belonging to that row's header.
+function importSchoolHistoryTemplate(cells,current){
+  const out=JSON.parse(JSON.stringify(current||{}));
+  // Re-import must replace previously imported values. Otherwise a bad import
+  // such as "PAYMENT MODE" in Discount — Additional Orders would survive
+  // even after the mapping was corrected. Preserve unrelated top-level data,
+  // but reset every School History section handled by this importer.
+  out.contacts={}; out.booksPayment={}; out.deliverables1={}; out.deliverables2={}; out.deliverables3={}; out.services={}; out.currentStatus=''; out.comments='';
+  const entries=Object.entries(cells).map(([ref,value])=>{const m=ref.match(/^([A-Z]+)(\d+)$/);if(!m)return null;let col=0;for(const ch of m[1])col=col*26+ch.charCodeAt(0)-64;return {ref,row:Number(m[2]),col,value:normExcel(value)};}).filter(Boolean);
+  const rows=new Map(); for(const e of entries){if(!rows.has(e.row))rows.set(e.row,[]);rows.get(e.row).push(e);} for(const r of rows.values())r.sort((a,b)=>a.col-b.col);
+  const rowVals=(r)=>rows.get(r)||[];
+  const exact=(v,label)=>cleanExcelLabel(v)===cleanExcelLabel(label);
+  const matchesLabel=(v,label)=>{const n=cleanExcelLabel(v),l=cleanExcelLabel(label);return n===l||n.startsWith(l+':')||n.startsWith(l+'：');};
+  const labelCell=(r,label)=>rowVals(r).find(x=>matchesLabel(x.value,label))||null;
+  const rowWithLabel=(label,start=1,end=9999)=>{for(const [r,vals] of rows){if(r<start||r>end)continue;if(vals.some(x=>matchesLabel(x.value,label)))return r;}return null;};
+  const cell=(r,c)=>rowVals(r).find(x=>x.col===c)?.value||'';
+  const rightValues=(r,label)=>{const vals=rowVals(r),idx=vals.findIndex(x=>matchesLabel(x.value,label));return idx<0?[]:vals.slice(idx+1).map(x=>x.value).filter(v=>!isBlankExcel(v));};
+  const valueRight=(r,label,offset=0)=>rightValues(r,label)[offset]||'';
+  const rowLabel=(r)=>rowVals(r)[0]?.value||'';
+  const set=(path,value,date=false)=>{let v=normExcel(value);if(date)v=excelDateText(v);if(!isBlankExcel(v))Object.assign(out,setPath(out,path,v));};
 
-  const cleanLabel = (v) => normExcel(v).replace(/[:：]$/,'').replace(/\s+/g,' ').toLowerCase();
-  const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const isFieldCell = (value, label) => {
-    const raw = normExcel(value);
-    return cleanLabel(raw) === cleanLabel(label) || new RegExp(`^${escapeRe(label)}\\s*[:：]`, 'i').test(raw);
-  };
-  const ownFieldValue = (cell, label) => {
-    if (!cell) return '';
-    const raw = normExcel(cell.value);
-    if (cleanLabel(raw) === cleanLabel(label)) return '';
-    return raw.replace(new RegExp(`^${escapeRe(label)}\\s*[:：]\\s*`, 'i'), '').trim();
-  };
-  const findLabel = (label, preferredRows=[]) => {
-    for (const row of preferredRows) {
-      const hit = (rows.get(row) || []).find(x => isFieldCell(x.value, label));
-      if (hit) return hit;
-    }
-    for (const x of entries) if (isFieldCell(x.value, label)) return x;
-    return null;
-  };
-  const valueAt = (row, col, date=false) => {
-    const x = [...(rows.get(row)||[])].find(e => e.col === col);
-    const v = x?.value || '';
-    return date ? excelDateText(v) : v;
-  };
-  const findHeaderCol = (headerRow, labels) => {
-    const wanted = labels.map(cleanLabel);
-    const hit = (rows.get(headerRow)||[]).find(x => wanted.includes(cleanLabel(x.value)));
-    return hit?.col ?? null;
-  };
-  const findHeaderRow = (labels, fallback) => {
-    const wanted = labels.map(cleanLabel);
-    const exact = (rows.get(fallback) || []).some(x => wanted.includes(cleanLabel(x.value)));
-    if (exact) return fallback;
-    for (const [r, cellsInRow] of rows) {
-      if (r >= fallback && cellsInRow.some(x => wanted.includes(cleanLabel(x.value)))) return r;
-    }
-    return fallback;
-  };
-  const findRowLabel = (label, fallback) => findLabel(label, fallback ? [fallback] : [])?.row ?? fallback;
-  const rowValue = (row, col, date=false, label='') => {
-    if (!row) return '';
-    const direct = col ? valueAt(row, col, date) : '';
-    if (direct) return direct;
-    if (label) {
-      const hit = findLabel(label, [row]);
-      const own = ownFieldValue(hit, label);
-      if (own) return date ? excelDateText(own) : own;
-    }
-    return '';
-  };
-  const firstNonLabelRight = (labelCell, blocked=[]) => {
-    if (!labelCell) return '';
-    const blockedSet = new Set(blocked.map(cleanLabel));
-    return (rows.get(labelCell.row)||[])
-      .filter(x=>x.col>labelCell.col && x.value && !blockedSet.has(cleanLabel(x.value)))
-      .sort((a,b)=>a.col-b.col)[0]?.value || '';
-  };
-  const set = (path, value) => {
-    const v = normExcel(value);
-    if (v && v !== '-' && v !== '—') Object.assign(out, setPath(out, path, v));
-  };
+  // Basic details
+  for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){const r=rowWithLabel(label,1,8);if(r){const ownCell=labelCell(r,label);const own=ownCell&&!exact(ownCell.value,label)?normExcel(ownCell.value).replace(/^[^:：]+[:：]\s*/,''):'';set(key,own||valueRight(r,label));}}
+  const schoolRow=rowWithLabel('SCHOOL NAME',1,4); const schoolName=schoolRow? (normExcel(labelCell(schoolRow,'SCHOOL NAME')?.value||'').replace(/^SCHOOL NAME\s*[:：]\s*/i,'')||valueRight(schoolRow,'SCHOOL NAME')) : normExcel(cell(2,1));
 
-  // Basic details: locate the label/value pairs by their labels. The common
-  // template also stores them in B/C/D/E, so this works for both layouts.
-  const basic = [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']];
-  for (const [label,key] of basic) {
-    const hit = findLabel(label, [3]);
-    let value = '';
-    if (hit) {
-      value = ownFieldValue(hit, label);
-      if (!value) value = firstNonLabelRight(hit, ['LOCATION','VINTAGE','BOOKS','CATEGORY']);
-      if (!value) value = valueAt(hit.row, hit.col + 1);
-    }
-    set(key, labelValue(value, label));
-  }
-  const schoolHit = findLabel('SCHOOL NAME', [2]);
-  const schoolName = schoolHit ? (ownFieldValue(schoolHit, 'SCHOOL NAME') || firstNonLabelRight(schoolHit, ['SCHOOL NAME']) || valueAt(schoolHit.row, schoolHit.col+1)) : '';
-
-  // Contacts: find each role label and take the first value to its right.
-  for (const [label,key,phoneKey] of [['CORRESPONDENT','correspondent','correspondentPhone'],['PRINCIPAL','principal','principalPhone'],['KEY PERSON','keyPerson','keyPersonPhone']]) {
-    const hit=findLabel(label);
-    const raw=ownFieldValue(hit, label) || firstNonLabelRight(hit, ['CORRESPONDENT','PRINCIPAL','KEY PERSON']) || '';
-    const c=splitContact(raw); set(`contacts.${key}`,c.name); set(`contacts.${phoneKey}`,c.phone);
+  // Contacts: name is first non-empty cell after the role; phone is the next
+  // phone-like cell. "nil" is not a phone and is ignored.
+  for(const [label,key,phoneKey] of [['CORRESPONDENT','correspondent','correspondentPhone'],['PRINCIPAL','principal','principalPhone'],['KEY PERSON','keyPerson','keyPersonPhone']]){
+    const r=rowWithLabel(label,1,20); if(!r)continue; const vals=rightValues(r,label); const name=vals.find(v=>!/^\+?\d[\d\s().-]{7,}$/.test(v))||''; const phone=vals.find(v=>/^\+?\d[\d\s().-]{7,}$/.test(v))||''; set(`contacts.${key}`,name); set(`contacts.${phoneKey}`,phone);
   }
 
-  // Books & Payment: resolve the actual header columns first.
-  const bpHeader=findHeaderRow(['INITIAL COUNT','ADDITIONAL ORDERS','RETURNS','REMARKS'],10);
-  const bpCols={initial:findHeaderCol(bpHeader,['INITIAL COUNT']), additional:findHeaderCol(bpHeader,['ADDITIONAL ORDERS']), returns:findHeaderCol(bpHeader,['RETURNS']), remarks:findHeaderCol(bpHeader,['REMARKS'])};
-  for (const [label,key] of [['LKG','lkg'],['UKG','ukg'],['DISCOUNT','discount']]) {
-    const r=findRowLabel(label); set(`booksPayment.${key}`,rowValue(r,bpCols.initial)); set(`booksPayment.${key}AdditionalOrders`,rowValue(r,bpCols.additional)); set(`booksPayment.${key}Returns`,rowValue(r,bpCols.returns)); set(`booksPayment.${key}Remarks`,rowValue(r,bpCols.remarks));
+  // Books & payment header. We read book rows only by their exact row labels;
+  // DISCOUNT and all payment rows are handled separately so they can never
+  // steal values from the count/additional/returns columns.
+  const bpHeader=rowWithLabel('INITIAL COUNT',1,25);
+  const bpHeaderVals=bpHeader?rowVals(bpHeader):[];
+  const headerCol=(label)=>bpHeaderVals.find(x=>exact(x.value,label))?.col||null;
+  const cInitial=headerCol('INITIAL COUNT')||2,cAdditional=headerCol('ADDITIONAL ORDERS')||3,cReturns=headerCol('RETURNS')||4;
+  const bookRows=[['LKG','lkg'],['UKG','ukg'],['LKG - HHP','lkgHhp'],['UKG - HHP','ukgHhp']];
+  for(const [label,key] of bookRows){const r=rowWithLabel(label,bpHeader?bpHeader+1:1,40);if(!r)continue;set(`booksPayment.${key}`,cell(r,cInitial));set(`booksPayment.${key}AdditionalOrders`,cell(r,cAdditional));set(`booksPayment.${key}Returns`,cell(r,cReturns));}
+
+  const firstValueAfter=(r,label,stopLabels=[])=>{const vals=rowVals(r),lc=labelCell(r,label);if(!lc)return '';const stops=new Set(stopLabels.map(cleanExcelLabel));for(const x of vals.filter(v=>v.col>lc.col).sort((a,b)=>a.col-b.col)){const n=cleanExcelLabel(x.value);if(stops.has(n))break;if(!isBlankExcel(x.value))return x.value;}return '';};
+  const delivery=rowWithLabel('DELIVERY DATE',1,40);if(delivery){set('booksPayment.deliveryDate',firstValueAfter(delivery,'DELIVERY DATE'),true);const creditLabel=labelCell(delivery,'P.Y. Credit');if(creditLabel){const creditVal=rowVals(delivery).filter(x=>x.col>creditLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.creditNote',creditVal?`P.Y. Credit: ${creditVal}`:'');}}
+  const discount=rowWithLabel('DISCOUNT',1,40);if(discount){set('booksPayment.discount',firstValueAfter(discount,'DISCOUNT',['PAYMENT MODE']));const pm=labelCell(discount,'PAYMENT MODE');if(pm){const pv=rowVals(discount).filter(x=>x.col>pm.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.paymentMode',pv);}}
+
+  const inv=rowWithLabel('SP INVOICE VALUE (MO)',1,45)||rowWithLabel('SP INVOICE VALUE (25-26)',1,45);if(inv){const moLabel=labelCell(inv,'SP INVOICE VALUE (MO)')||labelCell(inv,'SP INVOICE VALUE (25-26)');if(moLabel){const moVal=rowVals(inv).filter(x=>x.col>moLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.spInvoiceValueMo',moVal);set('booksPayment.spInvoiceValue2526',moVal);}const aoLabel=labelCell(inv,'SP INVOICE VALUE (AO)');if(aoLabel){const aoVal=firstValueAfter(inv,'SP INVOICE VALUE (AO)',['25-26 TOTAL']);set('booksPayment.spInvoiceValueAo',aoVal);}const totalLabel=labelCell(inv,'25-26 Total');if(totalLabel){const totalVal=rowVals(inv).filter(x=>x.col>totalLabel.col&&!isBlankExcel(x.value))[0]?.value||'';set('booksPayment.spInvoiceValue2526Total',totalVal);}}
+  const received=rowWithLabel('AMOUNT RECEIVED',1,45);if(received){set('booksPayment.amountReceived',valueRight(received,'AMOUNT RECEIVED',0));const vals=rightValues(received,'AMOUNT RECEIVED');const di=vals.findIndex(v=>cleanExcelLabel(v)==='date');if(di>=0&&vals[di+1])set('booksPayment.amountReceivedDate',vals[di+1],true);}
+  const pending=rowWithLabel('AMOUNT PENDING',1,45);if(pending){set('booksPayment.amountPending',valueRight(pending,'AMOUNT PENDING',0));const vals=rightValues(pending,'AMOUNT PENDING');const si=vals.findIndex(v=>cleanExcelLabel(v)==='status');if(si>=0&&vals[si+1])set('booksPayment.status',vals[si+1]);}
+  const status=rowWithLabel('STATUS',1,45);if(status){const own=stripExcelLabel(rowVals(status).find(x=>exact(x.value,'STATUS'))?.value||'');if(own)set('booksPayment.status',own);else set('booksPayment.status',valueRight(status,'STATUS',0));}
+  const bpComments=rowWithLabel('COMMENTS',1,45);if(bpComments && bpComments<=(pending||45))set('booksPayment.remarks',valueRight(bpComments,'COMMENTS',0));
+
+  // Deliverables 1 has COUNT/DATE headers. The singular "Teachers Manual"
+  // in the workbook maps to teachersManual1; the old teachersManual2 field is
+  // retained for backwards compatibility but is not invented during import.
+  const d1=rowWithLabel('DELIVERABLES 1',1,50);const d1HeaderVals=d1?rowVals(d1+1):[];const d1Count=d1HeaderVals.find(x=>exact(x.value,'COUNT'))?.col||2,d1Date=d1HeaderVals.find(x=>exact(x.value,'DATE'))?.col||3;
+  for(const [labels,key] of [[['TEACHERS COPY'],'teachersCopy'],[['TEACHERS MANUAL','TEACHERS MANUAL 1'],'teachersManual1'],[['TEACHERS MANUAL 2'],'teachersManual2'],[['FLASH CARD','FLASH CARDS'],'flashCards']]){let r=null;for(const a of labels){r=rowWithLabel(a,(d1||1)+1,50);if(r)break;}if(!r)continue;set(`deliverables1.${key}`,cell(r,d1Count));set(`deliverables1.${key}Date`,cell(r,d1Date),true);}
+
+  // Deliverables 2 has TWO headers. WhatsApp is its own row; the later
+  // "NEW APP / DATE" header applies to Windows App and Kids App rows.
+  const d2=rowWithLabel('DELIVERABLES 2',1,55);if(d2){const nextHeader=rowWithLabel('DELIVERABLES 2',d2+1,55);const wa=rowWithLabel('WHATSAPP',d2+1,(nextHeader||55)-1);if(wa){set('deliverables2.whatsapp',cell(wa,2));set('deliverables2.whatsappDate',cell(wa,3),true);}
+    const appHeader=nextHeader?rowVals(nextHeader):[];const appVersionCol=appHeader.find(x=>exact(x.value,'NEW APP'))?.col||2;const appDateCol=appHeader.find(x=>exact(x.value,'DATE'))?.col||3;
+    const win=rowWithLabel('WINDOWS APP',(nextHeader||d2)+1,55);const kids=rowWithLabel('KIDS APP',(nextHeader||d2)+1,55);
+    if(win){set('deliverables2.windowsApp.appVersion',cell(win,appVersionCol));set('deliverables2.windowsApp.date',cell(win,appDateCol),true);}
+    if(kids){set('deliverables2.kidsApp.count',cell(kids,2));set('deliverables2.kidsApp.lkg',cell(kids,2));set('deliverables2.kidsApp.date',cell(kids,appDateCol),true);set('deliverables2.kidsApp.systemTvBoth',cell(kids,4));}
+    const appComments=rowWithLabel('WINDOWS APP COMMENTS',(kids||win||d2)+1,55);if(appComments)set('deliverables2.appComments',valueRight(appComments,'WINDOWS APP COMMENTS',0));
   }
-  const inv=findLabel('SP INVOICE VALUE (25-26)'); if(inv) set('booksPayment.spInvoiceValue2526', ownFieldValue(inv,'SP INVOICE VALUE (25-26)') || firstNonLabelRight(inv,['SP INVOICE VALUE (25-26)','SP INVOICE VALUE (AO)']));
-  const ao=findLabel('SP INVOICE VALUE (AO)'); if(ao) set('booksPayment.spInvoiceValueAdditionalOrders', ownFieldValue(ao,'SP INVOICE VALUE (AO)') || firstNonLabelRight(ao,['SP INVOICE VALUE (25-26)','SP INVOICE VALUE (AO)']));
-  const received=findLabel('AMOUNT RECEIVED'); if(received) set('booksPayment.amountReceived', ownFieldValue(received,'AMOUNT RECEIVED') || firstNonLabelRight(received,['AMOUNT RECEIVED','DATE']));
-  const recvDateLabel=findLabel('DATE'); if(recvDateLabel && recvDateLabel.row===received?.row) set('booksPayment.amountReceivedDate', excelDateText(ownFieldValue(recvDateLabel,'DATE') || firstNonLabelRight(recvDateLabel,['DATE'])));
-  const pending=findLabel('AMOUNT PENDING'); if(pending) set('booksPayment.amountPending', ownFieldValue(pending,'AMOUNT PENDING') || firstNonLabelRight(pending,['AMOUNT PENDING','STATUS']));
-  const status=findLabel('STATUS'); if(status) set('booksPayment.status', ownFieldValue(status,'STATUS') || firstNonLabelRight(status,['STATUS']));
 
-  // Deliverables 1/3: use the COUNT and DATE header columns, not fixed B/C.
-  const d1=findHeaderRow(['COUNT','DATE'],18); const countCol=findHeaderCol(d1,['COUNT']); const dateCol=findHeaderCol(d1,['DATE']);
-  for (const [label,key] of [['TEACHERS COPY','teachersCopy'],['TEACHERS MANUAL 1','teachersManual1'],['TEACHERS MANUAL 2','teachersManual2'],['FLASH CARDS','flashCards']]) { const r=findRowLabel(label); set(`deliverables1.${key}`,rowValue(r,countCol,false,label)); set(`deliverables1.${key}Date`,rowValue(r,dateCol,true)); }
+  // Deliverables 3
+  const d3=rowWithLabel('DELIVERABLES 3',1,60);const d3HeaderVals=d3?rowVals(d3+1):[];const d3Count=d3HeaderVals.find(x=>exact(x.value,'COUNT'))?.col||2,d3Date=d3HeaderVals.find(x=>exact(x.value,'DATE'))?.col||3;
+  for(const [label,key] of [['QUESTION PAPER','questionPaper'],['PROGRESS CARD','progressCard']]){const r=rowWithLabel(label,(d3||1)+1,60);if(r){set(`deliverables3.${key}`,cell(r,d3Count));set(`deliverables3.${key}Date`,cell(r,d3Date),true);}}
 
-  const d2=findHeaderRow(['COUNT','DATE'],23); const d2Count=findHeaderCol(d2,['COUNT']); const d2Date=findHeaderCol(d2,['DATE']);
-  const wa=findRowLabel('WHATSAPP'); set('deliverables2.whatsapp',rowValue(wa,d2Count,false,'WHATSAPP')); set('deliverables2.whatsappDate',rowValue(wa,d2Date,true));
-  const appHeader=findHeaderRow(['APP VERSION','DATE','LKG','UKG','SYSTEM / TV / BOTH'],25); const appCols={version:findHeaderCol(appHeader,['APP VERSION']),date:findHeaderCol(appHeader,['DATE']),lkg:findHeaderCol(appHeader,['LKG']),ukg:findHeaderCol(appHeader,['UKG']),system:findHeaderCol(appHeader,['SYSTEM / TV / BOTH'])};
-  for (const [label,key] of [['WINDOWS APP','windowsApp'],['KIDS APP','kidsApp']]) { const r=findRowLabel(label); set(`deliverables2.${key}.appVersion`,rowValue(r,appCols.version)); set(`deliverables2.${key}.date`,rowValue(r,appCols.date,true)); set(`deliverables2.${key}.lkg`,rowValue(r,appCols.lkg)); set(`deliverables2.${key}.ukg`,rowValue(r,appCols.ukg)); set(`deliverables2.${key}.systemTvBoth`,rowValue(r,appCols.system)); }
-  const appComments=findLabel('WINDOWS APP/KIDS APP COMMENTS'); if(appComments) set('deliverables2.appComments',firstNonLabelRight(appComments,['WINDOWS APP/KIDS APP COMMENTS']));
-
-  const d3=findHeaderRow(['COUNT','DATE'],29); const d3Count=findHeaderCol(d3,['COUNT']); const d3Date=findHeaderCol(d3,['DATE']);
-  for (const [label,key] of [['QUESTION PAPER','questionPaper'],['PROGRESS CARD','progressCard']]) { const r=findRowLabel(label); set(`deliverables3.${key}`,rowValue(r,d3Count,false,label)); set(`deliverables3.${key}Date`,rowValue(r,d3Date,true)); }
-
-  // Services: DATE is the column immediately under the SERVICES header.
-  const svcHeader=findHeaderRow(['SERVICES'],32); const svcDateCol=findHeaderCol(svcHeader,['DATE']) || 2;
-  for (const [label,key] of [['T1','t1'],['T2','t2'],['GENERAL VISIT','generalVisit'],['ATU 2','atu2'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2','sim2'],['SIM 2 COMMENTS','sim2Comments'],['T3','t3'],['SIM 3','sim3'],['SIM 3 COMMENTS','sim3Comments']]) { const r=findRowLabel(label); set(`services.${key}`,ownFieldValue(findLabel(label,[r]),label) || rowValue(r,svcDateCol,key.toLowerCase().includes('comments')===false)); }
-  const cs=findLabel('CURRENT STATUS'); if(cs) set('currentStatus',ownFieldValue(cs,'CURRENT STATUS') || firstNonLabelRight(cs,['CURRENT STATUS']));
-  const comments=findLabel('COMMENTS'); if(comments) set('comments',ownFieldValue(comments,'COMMENTS') || firstNonLabelRight(comments,['COMMENTS']));
-  return {out, schoolName};
+  // Services: each service has its own row. No global DATE lookup and no
+  // fallback to another service's value.
+  const svcStart=rowWithLabel('SERVICES',1,70)||34;
+  for(const [label,key] of [['T1','t1'],['ATU 1','atu1'],['ATU 1 COMMENTS','atu1Comments'],['SIM 1','sim1'],['SIM 1 COMMENTS','sim1Comments'],['T2','t2'],['GENERAL VISIT','generalVisit'],['ATU 2','atu2'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2','sim2'],['SIM 2 COMMENTS','sim2Comments'],['T3','t3'],['SIM 3','sim3'],['SIM 3 COMMENTS','sim3Comments']]){const r=rowWithLabel(label,svcStart+1,90);if(r)set(`services.${key}`,valueRight(r,label,0));}
+  const currentStatusRow=rowWithLabel('CURRENT STATUS',svcStart+1,100);if(currentStatusRow){const lc=labelCell(currentStatusRow,'CURRENT STATUS');const own=lc&&!exact(lc.value,'CURRENT STATUS')?normExcel(lc.value).replace(/^CURRENT STATUS\s*[:：]\s*/i,''):'';set('currentStatus',own||valueRight(currentStatusRow,'CURRENT STATUS',0));}
+  const commentRows=[];for(const [r,vals] of rows){if(r>svcStart&&vals.some(x=>exact(x.value,'COMMENTS')))commentRows.push(r);}const lastComment=commentRows.at(-1);if(lastComment)set('comments',valueRight(lastComment,'COMMENTS',0));
+  return {out,schoolName};
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [contactChoice,setContactChoice]=useState('');
