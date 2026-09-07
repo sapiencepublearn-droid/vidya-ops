@@ -53,7 +53,7 @@ const claimSchema = z.object({
   category: z.enum(['Travel', 'Food', 'Stay', 'Others']),
   // Rupees in, paise stored. Integers only: floats and money do not mix.
   amount: z.number().positive().max(100000).multipleOf(0.01),
-  attachmentId: uuid,
+  attachmentId: uuid.optional(),
   place: z.string().trim().max(200).optional(),
   location: z.string().trim().max(200).optional(),
   note: z.string().trim().max(500).optional(),
@@ -956,11 +956,13 @@ router.post('/claims', idempotent(wrap(async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [req.user.id, f.date, claimCycleStart(f.date), f.expenseType, f.category, paise, f.place ?? null, f.location ?? null, f.note ?? null])).rows[0];
 
-    const upd = await c.query(
-      `UPDATE attachments SET claim_id=$1 WHERE attachment_id=$2 AND uploaded_by=$3
-         AND claim_id IS NULL AND submission_id IS NULL AND task_id IS NULL`,
-      [row.claim_id, f.attachmentId, req.user.id]);
-    if (!upd.rowCount) throw forbidden('That bill is not yours or is already attached to another claim.');
+    if (f.attachmentId) {
+      const upd = await c.query(
+        `UPDATE attachments SET claim_id=$1 WHERE attachment_id=$2 AND uploaded_by=$3
+           AND claim_id IS NULL AND submission_id IS NULL AND task_id IS NULL`,
+        [row.claim_id, f.attachmentId, req.user.id]);
+      if (!upd.rowCount) throw forbidden('That bill is not yours or is already attached to another claim.');
+    }
 
     await notifyAdmins(c, { kind: 'claim',
       body: `A ${f.category.toLowerCase()} claim of ₹${f.amount} was submitted.`, reqId: req.id });
