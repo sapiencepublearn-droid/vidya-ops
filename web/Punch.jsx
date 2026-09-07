@@ -300,6 +300,7 @@ function Problem({ T, problem, reported, reporting, onRetry, onReport, Btn, M })
 function SchoolVisitPanel({ T, api, M, Btn }) {
   const [data, setData] = useState(null);
   const [schoolId, setSchoolId] = useState('');
+  const [schoolQuery, setSchoolQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -338,10 +339,22 @@ function SchoolVisitPanel({ T, api, M, Btn }) {
       ) : (
         <>
           <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>At the assigned school, select it and check in. Check out when you leave the school.</div>
-          <select value={schoolId} onChange={(e) => setSchoolId(e.target.value)} disabled={busy} style={{ width: '100%', padding: '12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, marginBottom: 10 }}>
-            <option value="">Select school</option>
-            {(data?.schools || []).map((s) => <option key={s.id} value={s.id}>{s.name}{s.zone ? ` · ${s.zone}` : ''}</option>)}
-          </select>
+          <div style={{ position: 'relative', marginBottom: 10 }}>
+            <input value={schoolQuery} disabled={busy} onChange={(e) => { setSchoolQuery(e.target.value); setSchoolId(''); }}
+              placeholder="Type school name…" autoComplete="off"
+              style={{ width: '100%', padding: '12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, outline: 'none', boxSizing: 'border-box' }} />
+            {schoolQuery.trim() && !schoolId && (
+              <div style={{ position: 'absolute', zIndex: 5, left: 0, right: 0, top: 'calc(100% + 4px)', background: T.bg, border: `1px solid ${T.line}`, borderRadius: 8, maxHeight: 220, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,.18)' }}>
+                {(data?.schools || []).filter((s) => s.name.toLowerCase().includes(schoolQuery.trim().toLowerCase()) || (s.zone || '').toLowerCase().includes(schoolQuery.trim().toLowerCase())).slice(0, 12).map((s) => (
+                  <button key={s.id} type="button" className="press" onClick={() => { setSchoolId(s.id); setSchoolQuery(s.name); }}
+                    style={{ width: '100%', textAlign: 'left', padding: '11px 12px', background: 'none', border: 'none', borderBottom: `1px solid ${T.hair}`, color: T.text, cursor: 'pointer' }}>
+                    <span style={{ display: 'block', fontSize: 13 }}>{s.name}</span>
+                    {s.zone && <span style={{ display: 'block', fontSize: 11, color: T.faint, marginTop: 3 }}>{s.zone}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <Btn busy={busy} onClick={start} disabled={!schoolId}>School Check In</Btn>
         </>
       )}

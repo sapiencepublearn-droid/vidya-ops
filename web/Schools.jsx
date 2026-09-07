@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { newActionKey } from './api-client.js';
 import { SchoolMap, EvidenceMap, directionsUrl } from './SchoolMap.jsx';
 
@@ -151,6 +151,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   const [busy, setBusy] = useState(null);
   const [problem, setProblem] = useState(null);
   const [confirming, setConfirming] = useState(null);
+  const [historyEditing, setHistoryEditing] = useState(false);
 
   const assign = async (employeeId, remove) => {
     setBusy(employeeId); setProblem(null);
@@ -235,6 +236,8 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
           <div style={{ fontSize: 14, color: T.mute, lineHeight: 1.6 }}>{s.address}</div>
         </div>
       )}
+
+      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} />
 
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
@@ -362,6 +365,47 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 }
 
 /* ──────────────────────────────────────────────────── add and edit */
+
+
+const historySections = [
+  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.principal','Principal'], ['contacts.keyPerson','Key Person']]],
+  ['Books & Payment', [['booksPayment.lkg','LKG'], ['booksPayment.ukg','UKG'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValue2526','SP Invoice Value (25-26)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (Additional Orders)'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']]],
+  ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy'], ['deliverables1.teachersManual1','Teachers Manual 1'], ['deliverables1.teachersManual2','Teachers Manual 2'], ['deliverables1.flashCards','Flash Cards']]],
+  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App / Kids App Comments']]],
+  ['Deliverables 3', [['deliverables3.questionPaper','Question Paper'], ['deliverables3.progressCard','Progress Card']]],
+  ['Services', [['services.t1','T1'], ['services.t2','T2'], ['services.generalVisit','General Visit'], ['services.atu2','ATU 2'], ['services.atu2Comments','ATU 2 Comments'], ['services.sim2','SIM 2'], ['services.sim2Comments','SIM 2 Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Comments','SIM 3 Comments']]],
+  ['Current status', [['currentStatus','Current Status'], ['comments','Comments']]],
+];
+function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
+function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
+
+function SchoolHistoryCard({ T, api, school, editing, setEditing }) {
+  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null);
+  const initial=school.school_history || {};
+  const [draft,setDraft]=useState(initial);
+  useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
+  const save=async()=>{setBusy(true);setProblem(null);try{await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);window.location.reload();}catch(e){setProblem(e);}finally{setBusy(false);}};
+  const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
+  return <div style={{position:'relative',marginBottom:40,padding:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
+      <div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div>
+      <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>
+    </div>
+    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{
+      const vals=fields.map(([path,label])=>[label,String(getPath(initial,path)).trim()]).filter(([,v])=>v);
+      if(!vals.length)return null; return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}><div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>{vals.map(([label,value])=><div key={label} style={{display:'flex',gap:12,padding:'5px 0',fontSize:12}}><span style={{color:T.faint,minWidth:190}}>{label}</span><span style={{color:T.text,whiteSpace:'pre-wrap'}}>{value}</span></div>)}</div>;
+    })}
+    {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div className="rise" style={{width:'100%',maxWidth:680,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
+        {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn: /comments|remarks|appComments|Comments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label) ? <textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/> : <input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
+        {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}
+        <div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
+      </div>
+    </div>}
+  </div>;
+}
 
 function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const editing = !!school;

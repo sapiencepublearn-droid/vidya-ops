@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'node:crypto';
 import { config, logger, ApiError, dbHealth, fullHealth, pool } from './core.js';
 import { router } from './routes.js';
+import { runAttendanceReminders } from './reliability.js';
 
 // One source of truth. A hardcoded string here drifts from package.json
 // the first time either is bumped, and then /health reports a version that
@@ -227,7 +228,14 @@ export async function start() {
   const app = createApp();
   const server = app.listen(config.port, () => logger.info({ port: config.port, env: config.env }, 'listening'));
 
+  // Small in-process scheduler for the team's fixed 09:00/18:00 IST reminders.
+  // The DB run table makes each reminder idempotent across restarts.
+  const reminderTimer = setInterval(() => runAttendanceReminders().catch((err) => logger.error({ err }, 'attendance reminder failed')), 60_000);
+  runAttendanceReminders().catch((err) => logger.error({ err }, 'attendance reminder failed at startup'));
+
+
   const shutdown = async (signal) => {
+    clearInterval(reminderTimer);
     logger.info({ signal }, 'shutting down');
     server.close(async () => {
       await pool.end().catch(() => {});

@@ -397,6 +397,8 @@ function Employee({ me, onOut, theme, setTheme }) {
   const profile = useResource(() => api.me(), []);
   const lat = useResource(() => api.latToday(), []);
   const broadcasts = useResource(() => api.broadcasts(), []);
+  const notifications = useResource(() => api.notifications(), []);
+  useEffect(() => { const id = setInterval(() => notifications.reload(), 60000); return () => clearInterval(id); }, [notifications.reload]);
 
   const nav = [
     ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
@@ -436,7 +438,7 @@ function Employee({ me, onOut, theme, setTheme }) {
         <button className="press" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"
           style={{ background: 'none', border: 'none', color: T.text, fontSize: 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>☰</button>
         <Brand size={22} showName={false} />
-        <ThemeToggle theme={theme} setTheme={setTheme} />
+        <div style={{display:'flex',alignItems:'center',gap:10}}><NotificationBell T={T} notifications={notifications} /><ThemeToggle theme={theme} setTheme={setTheme} /></div>
       </header>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 57px)' }}>
@@ -482,6 +484,24 @@ function Employee({ me, onOut, theme, setTheme }) {
       )}
     </div>
   );
+}
+
+function NotificationBell({ T, notifications }) {
+  const [open,setOpen]=useState(false);
+  const items=(notifications.data||[]).slice(0,8);
+  const unread=items.filter(n=>!n.read_at).length;
+  return <div style={{position:'relative'}}>
+    <button className="press" onClick={()=>setOpen(v=>!v)} aria-label={`${unread} unread notifications`} style={{position:'relative',width:34,height:34,borderRadius:9,border:`1px solid ${T.line}`,background:'transparent',color:T.text,cursor:'pointer',fontSize:17}}>♢
+      {unread>0&&<span style={{position:'absolute',top:5,right:5,width:7,height:7,borderRadius:'50%',background:T.accent}}/>}
+    </button>
+    {open&&<>
+      <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,zIndex:25}}/>
+      <div className="rise" style={{position:'absolute',right:0,top:42,width:'min(330px, calc(100vw - 32px))',background:T.bg,border:`1px solid ${T.line}`,borderRadius:12,boxShadow:'0 12px 35px rgba(0,0,0,.18)',zIndex:30,overflow:'hidden'}}>
+        <div style={{padding:'13px 15px',borderBottom:`1px solid ${T.line}`,fontSize:13,fontWeight:600}}>Notifications</div>
+        {!items.length?<div style={{padding:18,fontSize:12,color:T.mute}}>No notifications.</div>:items.map(n=><div key={n.notification_id} style={{padding:'12px 15px',borderBottom:`1px solid ${T.hair}`,fontSize:12,lineHeight:1.5}}><div>{n.body}</div><div style={{fontSize:10,color:T.faint,marginTop:5}}>{istTime(n.created_at)}</div></div>)}
+      </div>
+    </>}
+  </div>;
 }
 
 function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews }) {

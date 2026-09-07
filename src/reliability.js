@@ -147,3 +147,54 @@ export async function notifyEveryone(client, { kind, body, reqId }) {
     logger.error({ err: e, reqId, kind }, 'broadcast notification failed, business action kept');
   }
 }
+
+
+/** Create the two daily attendance reminders once, in IST. The unique run
+ * row makes this safe if the Render service briefly starts twice. */
+export async function runAttendanceReminders() {
+  const result = await pool.query(`
+    SELECT ist_today() AS business_date,
+           (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::time AS local_time`);
+  const { business_date: day, local_time: localTime } = result.rows[0];
+  const hhmm = String(localTime).slice(0, 5);
+  let type = null;
+  if (hhmm === '09:00') type = 'check_in';
+  if (hhmm === '18:00') type = 'check_out';
+  if (!type) return { sent: false };
+
+  const claimed = await pool.query(
+    `INSERT INTO attendance_reminder_runs (reminder_date, reminder_type)
+     VALUES ($1,$2) ON CONFLICT (reminder_date, reminder_type) DO NOTHING
+     RETURNING run_id`, [day, type]);
+  if (!claimed.rowCount) return { sent: false, duplicate: true };
+
+  if (type === 'check_in') {
+    await pool.query(`
+      INSERT INTO notifications (recipient_id, kind, body)
+      SELECT e.employee_id, 'attendance_reminder',
+             'Good morning. Please record your Punch In before starting today''s work. This keeps attendance and work records accurate.'
+        FROM employees e
+       WHERE e.status='Active'
+         AND NOT EXISTS (
+           SELECT 1 FROM attendance a
+            WHERE a.employee_id=e.employee_id
+              AND a.work_date=ist_today()
+              AND a.check_in_time IS NOT NULL
+         )`);
+  } else {
+    await pool.query(`
+      INSERT INTO notifications (recipient_id, kind, body)
+      SELECT e.employee_id, 'attendance_reminder',
+             'Workday reminder: if you have finished today''s work, please complete End Day. If a school visit is active, check out from the school first.'
+        FROM employees e
+       WHERE e.status='Active'
+         AND EXISTS (
+           SELECT 1 FROM attendance a
+            WHERE a.employee_id=e.employee_id
+              AND a.work_date=ist_today()
+              AND a.check_in_time IS NOT NULL
+              AND a.check_out_time IS NULL
+         )`);
+  }
+  return { sent: true, type };
+}

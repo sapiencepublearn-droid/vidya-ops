@@ -595,6 +595,68 @@ router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
   res.json({ ...rows[0], assignedEmployees: assigned, recentVisits: visits });
 }));
 
+const schoolHistorySchema = z.object({
+  vintage: z.string().trim().max(120).optional().nullable(),
+  books: z.string().trim().max(120).optional().nullable(),
+  category: z.string().trim().max(120).optional().nullable(),
+  contacts: z.object({
+    correspondent: z.string().trim().max(160).optional().nullable(),
+    principal: z.string().trim().max(160).optional().nullable(),
+    keyPerson: z.string().trim().max(160).optional().nullable(),
+  }).default({}),
+  booksPayment: z.object({
+    lkg: z.string().trim().max(120).optional().nullable(),
+    ukg: z.string().trim().max(120).optional().nullable(),
+    discount: z.string().trim().max(120).optional().nullable(),
+    spInvoiceValue2526: z.string().trim().max(120).optional().nullable(),
+    spInvoiceValueAdditionalOrders: z.string().trim().max(120).optional().nullable(),
+    amountReceived: z.string().trim().max(120).optional().nullable(),
+    amountReceivedDate: z.string().trim().max(40).optional().nullable(),
+    amountPending: z.string().trim().max(120).optional().nullable(),
+    status: z.string().trim().max(120).optional().nullable(),
+    remarks: z.string().trim().max(500).optional().nullable(),
+  }).default({}),
+  deliverables1: z.object({
+    teachersCopy: z.string().trim().max(120).optional().nullable(),
+    teachersManual1: z.string().trim().max(120).optional().nullable(),
+    teachersManual2: z.string().trim().max(120).optional().nullable(),
+    flashCards: z.string().trim().max(120).optional().nullable(),
+  }).default({}),
+  deliverables2: z.object({
+    whatsapp: z.string().trim().max(120).optional().nullable(),
+    windowsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
+    kidsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
+    appComments: z.string().trim().max(1000).optional().nullable(),
+  }).default({}),
+  deliverables3: z.object({
+    questionPaper: z.string().trim().max(120).optional().nullable(),
+    progressCard: z.string().trim().max(120).optional().nullable(),
+  }).default({}),
+  services: z.object({
+    t1: z.string().trim().max(120).optional().nullable(),
+    t2: z.string().trim().max(120).optional().nullable(),
+    generalVisit: z.string().trim().max(120).optional().nullable(),
+    atu2: z.string().trim().max(120).optional().nullable(),
+    atu2Comments: z.string().trim().max(1000).optional().nullable(),
+    sim2: z.string().trim().max(120).optional().nullable(),
+    sim2Comments: z.string().trim().max(1000).optional().nullable(),
+    t3: z.string().trim().max(120).optional().nullable(),
+    sim3: z.string().trim().max(120).optional().nullable(),
+    sim3Comments: z.string().trim().max(1000).optional().nullable(),
+  }).default({}),
+  currentStatus: z.string().trim().max(300).optional().nullable(),
+  comments: z.string().trim().max(2000).optional().nullable(),
+}).strict();
+
+router.put('/admin/schools/:id/history', adminOnly, uuidParam('id'), idempotent(wrap(async (req, res) => {
+  const f = parse(schoolHistorySchema, req.body);
+  const row = (await pool.query(
+    `UPDATE locations SET school_history=$2, updated_at=now() WHERE location_id=$1 AND kind='school' RETURNING location_id, school_history`,
+    [req.params.id, JSON.stringify(f)])).rows[0];
+  if (!row) throw notFound('That school does not exist.');
+  res.json(row);
+})));
+
 router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
   const f = parse(schoolSchema, req.body);
   const out = await tx(req.user, async (c) => {
