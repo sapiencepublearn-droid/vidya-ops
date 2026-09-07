@@ -58,6 +58,33 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     return data;
   }
 
+    async requestBlob(path, { method = 'GET', body, idempotencyKey } = {}) {
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      let res;
+      try {
+        res = await fetch(`${baseUrl}${path}`, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch {
+        throw new ApiError(0, 'network_error', 'Could not reach the server. Check your connection.');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON error */ }
+        if (res.status === 401) {
+          token = null; employee = null;
+          try { localStorage?.clear?.(); sessionStorage?.clear?.(); } catch { /* best effort */ }
+          onUnauthenticated?.(data?.error);
+        }
+        throw new ApiError(res.status, data?.error || 'error', data?.message || 'Something went wrong.', data?.details, data?.requestId);
+      }
+      return res.blob();
+    }
+
   return {
     get session() { return employee; },
     get isAuthenticated() { return !!token; },
@@ -130,8 +157,24 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       employees: () => request('/admin/employees'),
       createEmployee: (body) => request('/admin/employees', { method: 'POST', body }),
       createTask: (body) => request('/tasks', { method: 'POST', body }),
-      claims: (status) => request(`/admin/claims${status ? `?status=${status}` : ''}`),
-      decideClaim: (id, body, key) => request(`/admin/claims/${id}/decide`, { method: 'POST', body, idempotencyKey: key }),
+      claims: ({ status, cycle } = {}) => {
+        const qs = new URLSearchParams();
+        if (status) qs.set('status', status);
+        if (cycle) qs.set('cycle', cycle);
+        const q = qs.toString();
+        return request(`/admin/claims${q ? `?${q}` : ''}`);
+      },
+      claimCycles: () => request('/admin/claims/cycles'),
+      reviewClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/review`, { method: 'POST', idempotencyKey: key }),
+      closeClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/close`, { method: 'POST', idempotencyKey: key }),
+      exportClaims: async (cycle) => {
+        const blob = await requestBlob(`/admin/claims/cycles/${cycle}/export.xls`);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `claims-${cycle}.xls`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      },
       incidents: (state) => request(`/admin/incidents${state ? `?state=${state}` : ''}`),
       resolveIncident: (id, body, key) => request(`/admin/incidents/${id}/resolve`, { method: 'POST', body, idempotencyKey: key }),
       approve: (id, key) => request(`/admin/submissions/${id}/approve`, { method: 'POST', idempotencyKey: key }),

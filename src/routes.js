@@ -49,6 +49,7 @@ const taskSchema = z.object({
 
 const claimSchema = z.object({
   date: isoDate,
+  expenseType: z.enum(['Local', 'Outstation']),
   category: z.enum(['Travel', 'Food', 'Stay', 'Others']),
   // Rupees in, paise stored. Integers only: floats and money do not mix.
   amount: z.number().positive().max(100000).multipleOf(0.01),
@@ -888,6 +889,17 @@ router.post('/admin/submissions/:id/return', uuidParam('id'), adminOnly, idempot
 
 const CAP_COLUMN = { Food: 'cap_food', Stay: 'cap_stay' };
 
+// Claims run in Saturday → Friday cycles. Sunday is a holiday; if a trainer
+// works on Sunday, that claim belongs to the following Saturday's cycle.
+const claimCycleStart = (isoDate) => {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  const dow = d.getUTCDay(); // Sunday=0 ... Saturday=6
+  if (dow === 0) d.setUTCDate(d.getUTCDate() + 6);
+  else d.setUTCDate(d.getUTCDate() - ((dow + 1) % 7));
+  return d.toISOString().slice(0, 10);
+};
+
+
 router.post('/claims', idempotent(wrap(async (req, res) => {
   const f = parse(claimSchema, req.body);
   const paise = Math.round(f.amount * 100);
@@ -896,6 +908,16 @@ router.post('/claims', idempotent(wrap(async (req, res) => {
     const emp = (await c.query(
       `SELECT claims_enabled, cap_food, cap_stay FROM employees WHERE employee_id=$1`, [req.user.id])).rows[0];
     if (!emp.claims_enabled) throw forbidden('Reimbursement is not enabled on your account.');
+
+    const cycleStart = claimCycleStart(f.date);
+    const cycle = (await c.query(
+      `SELECT status FROM claim_cycles WHERE cycle_start=$1 FOR SHARE`, [cycleStart])).rows[0];
+    if (cycle?.status === 'Closed') {
+      throw conflict('That weekly claim cycle is already closed. Corrections must use the audit correction process.', 'claim_cycle_closed');
+    }
+
+    await c.query(
+      `INSERT INTO claim_cycles (cycle_start) VALUES ($1) ON CONFLICT (cycle_start) DO NOTHING`, [cycleStart]);
 
     const today = (await c.query(`SELECT ist_today() AS d`)).rows[0].d;
     if (f.date > today.toISOString().slice(0, 10)) {
@@ -930,9 +952,9 @@ router.post('/claims', idempotent(wrap(async (req, res) => {
     }
 
     const row = (await c.query(
-      `INSERT INTO claims (employee_id, claim_date, category, amount_paise, place, location, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [req.user.id, f.date, f.category, paise, f.place ?? null, f.location ?? null, f.note ?? null])).rows[0];
+      `INSERT INTO claims (employee_id, claim_date, claim_cycle_start, expense_type, category, amount_paise, place, location, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+      [req.user.id, f.date, claimCycleStart(f.date), f.expenseType, f.category, paise, f.place ?? null, f.location ?? null, f.note ?? null])).rows[0];
 
     const upd = await c.query(
       `UPDATE attachments SET claim_id=$1 WHERE attachment_id=$2 AND uploaded_by=$3
@@ -969,37 +991,151 @@ router.get('/claims/:id', uuidParam('id'), wrap(async (req, res) => {
 router.get('/admin/claims', adminOnly, wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
   const status = ['Pending', 'Approved', 'Rejected'].includes(req.query.status) ? req.query.status : null;
+  const cycle = /^\d{4}-\d{2}-\d{2}$/.test(req.query.cycle || '') ? req.query.cycle : null;
   const { rows } = await tx(req.user, (c) => c.query(
-    `SELECT c.*, e.name AS employee_name FROM claims c JOIN employees e ON e.employee_id=c.employee_id
+    `SELECT c.*, e.name AS employee_name,
+            c.claim_cycle_start AS cycle_start,
+            (c.claim_cycle_start + INTERVAL '6 days')::date AS cycle_end,
+            COALESCE(cc.status, 'Open') AS cycle_status
+       FROM claims c JOIN employees e ON e.employee_id=c.employee_id
+      LEFT JOIN claim_cycles cc ON cc.cycle_start=c.claim_cycle_start
       WHERE ($1::text IS NULL OR c.status::text=$1)
-      ORDER BY c.created_at DESC LIMIT $2 OFFSET $3`, [status, limit, offset]));
+        AND ($2::date IS NULL OR c.claim_cycle_start=$2::date)
+      ORDER BY c.claim_cycle_start DESC, c.created_at DESC LIMIT $3 OFFSET $4`,
+    [status, cycle, limit, offset]));
   res.json(rows);
 }));
 
-router.post('/admin/claims/:id/decide', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
-  const f = parse(z.object({
-    decision: z.enum(['Approved', 'Rejected']),
-    reason: z.string().trim().max(2000).optional(),
-  }).strict(), req.body);
-  if (f.decision === 'Rejected' && !f.reason) {
-    throw unprocessable('Give a reason so the employee knows what to correct.', 'reason_required');
-  }
+router.get('/admin/claims/cycles', adminOnly, wrap(async (req, res) => {
+  const { limit, offset } = page(req.query);
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT c.claim_cycle_start AS cycle_start,
+            (c.claim_cycle_start + INTERVAL '6 days')::date AS cycle_end,
+            COALESCE(cc.status, 'Open') AS cycle_status,
+            COALESCE(cc.status, 'Open') AS status,
+            cc.reviewed_by, cc.reviewed_at, cc.closed_by, cc.closed_at,
+            COUNT(*)::int AS bill_count,
+            COUNT(DISTINCT c.employee_id)::int AS employee_count,
+            COALESCE(SUM(c.amount_paise),0)::bigint AS total_paise,
+            COALESCE(SUM(c.amount_paise) FILTER (WHERE c.expense_type='Local'),0)::bigint AS local_paise,
+            COALESCE(SUM(c.amount_paise) FILTER (WHERE c.expense_type='Outstation'),0)::bigint AS outstation_paise
+       FROM claims c
+       LEFT JOIN claim_cycles cc ON cc.cycle_start=c.claim_cycle_start
+      WHERE c.claim_cycle_start IS NOT NULL
+      GROUP BY c.claim_cycle_start, cc.status, cc.reviewed_by, cc.reviewed_at, cc.closed_by, cc.closed_at
+      ORDER BY c.claim_cycle_start DESC
+      LIMIT $1 OFFSET $2`, [limit, offset]));
+  res.json(rows);
+}));
+
+router.post('/admin/claims/cycles/:cycle/review', adminOnly, idempotent(wrap(async (req, res) => {
+  const cycle = parse(z.object({ cycle: isoDate }).strict(), req.params).cycle;
   const out = await tx(req.user, async (c) => {
-    const cur = (await c.query(`SELECT claim_id, employee_id, status, amount_paise FROM claims
-                                 WHERE claim_id=$1 FOR UPDATE`, [req.params.id])).rows[0];
-    if (!cur) throw notFound('That claim does not exist.');
-    if (cur.status !== 'Pending') throw conflict('This claim was already reviewed.', 'already_reviewed');
+    const cur = (await c.query(`SELECT cycle_start, status FROM claim_cycles WHERE cycle_start=$1 FOR UPDATE`, [cycle])).rows[0];
+    if (!cur) throw notFound('That claim cycle does not exist.');
+    if (cur.status === 'Closed') throw conflict('That claim cycle is already closed.', 'claim_cycle_closed');
     const row = (await c.query(
-      `UPDATE claims SET status=$2, reject_reason=$3, reviewed_by=$4, reviewed_at=now()
-        WHERE claim_id=$1 RETURNING *`,
-      [cur.claim_id, f.decision, f.decision === 'Rejected' ? f.reason : null, req.user.id])).rows[0];
-    await notify(c, { recipientId: cur.employee_id,
-      kind: f.decision === 'Approved' ? 'approved' : 'returned',
-      body: `Your claim of ₹${cur.amount_paise / 100} was ${f.decision.toLowerCase()}.`, reqId: req.id });
+      `UPDATE claim_cycles SET status='Reviewed', reviewed_by=$2, reviewed_at=now(), updated_at=now()
+        WHERE cycle_start=$1 RETURNING *`, [cycle, req.user.id])).rows[0];
     return row;
-  }, { reason: f.decision === 'Rejected' ? f.reason : `claim ${f.decision.toLowerCase()}` });
+  });
   res.json(out);
 })));
+
+router.post('/admin/claims/cycles/:cycle/close', adminOnly, idempotent(wrap(async (req, res) => {
+  const cycle = parse(z.object({ cycle: isoDate }).strict(), req.params).cycle;
+  const out = await tx(req.user, async (c) => {
+    const cur = (await c.query(`SELECT cycle_start, status FROM claim_cycles WHERE cycle_start=$1 FOR UPDATE`, [cycle])).rows[0];
+    if (!cur) throw notFound('That claim cycle does not exist.');
+    if (cur.status === 'Closed') return cur;
+    if (cur.status !== 'Reviewed') throw conflict('Review the claim cycle before closing it.', 'review_required');
+    const row = (await c.query(
+      `UPDATE claim_cycles SET status='Closed', closed_by=$2, closed_at=now(), updated_at=now()
+        WHERE cycle_start=$1 RETURNING *`, [cycle, req.user.id])).rows[0];
+    return row;
+  });
+  res.json(out);
+})));
+
+/* Claims are reviewed and closed at the weekly-cycle level. */
+
+// Excel-compatible SpreadsheetML workbook. No extra npm dependency is required.
+const xmlEscape = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+const excelCell = (value, type = 'String') =>
+  `<Cell><Data ss:Type="${type}">${xmlEscape(value)}</Data></Cell>`;
+const excelRow = (cells) => `<Row>${cells.join('')}</Row>`;
+const excelSheet = (name, rows) =>
+  `<Worksheet ss:Name="${xmlEscape(name)}"><Table>${rows.join('')}</Table></Worksheet>`;
+
+router.get('/admin/claims/cycles/:cycle/export.xls', adminOnly, wrap(async (req, res) => {
+  const cycle = parse(z.object({ cycle: isoDate }).strict(), req.params).cycle;
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT c.claim_id, c.claim_date, c.claim_cycle_start, e.name AS employee_name,
+            c.employee_id, c.expense_type, c.category, c.amount_paise,
+            c.place, c.location, c.note, c.created_at,
+            COALESCE(cc.status, 'Open') AS cycle_status
+       FROM claims c
+       JOIN employees e ON e.employee_id=c.employee_id
+       LEFT JOIN claim_cycles cc ON cc.cycle_start=c.claim_cycle_start
+      WHERE c.claim_cycle_start=$1
+      ORDER BY e.name, c.expense_type, c.claim_date, c.created_at`, [cycle]));
+
+  if (!rows.length) throw notFound('That claim cycle has no bills.');
+  const cycleEnd = new Date(`${cycle}T00:00:00Z`);
+  cycleEnd.setUTCDate(cycleEnd.getUTCDate() + 6);
+  const end = cycleEnd.toISOString().slice(0, 10);
+  const money = (paise) => Number(paise || 0) / 100;
+  const total = rows.reduce((s, r) => s + money(r.amount_paise), 0);
+  const local = rows.filter(r => r.expense_type === 'Local').reduce((s, r) => s + money(r.amount_paise), 0);
+  const outstation = rows.filter(r => r.expense_type === 'Outstation').reduce((s, r) => s + money(r.amount_paise), 0);
+  const employees = new Map();
+  for (const r of rows) {
+    const e = employees.get(r.employee_id) || { name: r.employee_name, local: 0, outstation: 0, total: 0, bills: 0 };
+    const a = money(r.amount_paise);
+    e.total += a; e.bills += 1;
+    if (r.expense_type === 'Local') e.local += a;
+    if (r.expense_type === 'Outstation') e.outstation += a;
+    employees.set(r.employee_id, e);
+  }
+  const fmt = (n) => n.toFixed(2);
+  const summaryRows = [
+    excelRow([excelCell('Weekly Claims Summary'), excelCell(''), excelCell(''), excelCell('')]),
+    excelRow([excelCell('Cycle Start'), excelCell(cycle), excelCell('Cycle End'), excelCell(end)]),
+    excelRow([excelCell('Status'), excelCell(rows[0].cycle_status)]),
+    excelRow([excelCell('Employee'), excelCell('Local'), excelCell('Outstation'), excelCell('Total'), excelCell('Bills')]),
+    ...Array.from(employees.values()).map(e => excelRow([excelCell(e.name), excelCell(fmt(e.local),'Number'), excelCell(fmt(e.outstation),'Number'), excelCell(fmt(e.total),'Number'), excelCell(e.bills,'Number')])),
+    excelRow([excelCell('TOTAL'), excelCell(fmt(local),'Number'), excelCell(fmt(outstation),'Number'), excelCell(fmt(total),'Number'), excelCell(rows.length,'Number')]),
+  ];
+  const detailHeader = ['Employee','Date','Expense Type','Category','Amount','Place','Location','Note','Claim ID','Created At','Cycle Status'];
+  const detailRows = [excelRow(detailHeader.map(h => excelCell(h))), ...rows.map(r => excelRow([
+    excelCell(r.employee_name), excelCell(r.claim_date), excelCell(r.expense_type || 'Unclassified'), excelCell(r.category),
+    excelCell(fmt(money(r.amount_paise)),'Number'), excelCell(r.place), excelCell(r.location), excelCell(r.note),
+    excelCell(r.claim_id), excelCell(r.created_at ? new Date(r.created_at).toISOString() : ''), excelCell(r.cycle_status)
+  ]))];
+  const localRows = [excelRow(detailHeader.map(h => excelCell(h))), ...rows.filter(r => r.expense_type === 'Local').map(r => excelRow([
+    excelCell(r.employee_name), excelCell(r.claim_date), excelCell(r.expense_type), excelCell(r.category), excelCell(fmt(money(r.amount_paise)),'Number'),
+    excelCell(r.place), excelCell(r.location), excelCell(r.note), excelCell(r.claim_id), excelCell(r.created_at ? new Date(r.created_at).toISOString() : ''), excelCell(r.cycle_status)
+  ]))];
+  const outRows = [excelRow(detailHeader.map(h => excelCell(h))), ...rows.filter(r => r.expense_type === 'Outstation').map(r => excelRow([
+    excelCell(r.employee_name), excelCell(r.claim_date), excelCell(r.expense_type), excelCell(r.category), excelCell(fmt(money(r.amount_paise)),'Number'),
+    excelCell(r.place), excelCell(r.location), excelCell(r.note), excelCell(r.claim_id), excelCell(r.created_at ? new Date(r.created_at).toISOString() : ''), excelCell(r.cycle_status)
+  ]))];
+
+  const workbook = `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+<Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center"/><Font ss:FontName="Aptos" ss:Size="10"/></Style></Styles>
+${excelSheet('Weekly Summary', summaryRows)}
+${excelSheet('Bill Details', detailRows)}
+${excelSheet('Local Expenses', localRows)}
+${excelSheet('Outstation Expenses', outRows)}
+</Workbook>`;
+  res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="claims-${cycle}-to-${end}.xls"`);
+  res.send(workbook);
+}));
 
 /* ────────────────────────────────────────────────────────────── files */
 

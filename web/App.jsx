@@ -779,6 +779,7 @@ function ClaimForm({ caps, onClose, onDone }) {
   // One key for this form. Tapping Submit twice files one claim, not two.
   const actionKey = useRef(newActionKey());
   const [category, setCategory] = useState('Travel');
+  const [expenseType, setExpenseType] = useState('Local');
   const [amount, setAmount] = useState('');
   const [place, setPlace] = useState('');
   const [location, setLocation] = useState('');
@@ -797,7 +798,7 @@ function ClaimForm({ caps, onClose, onDone }) {
       const uploaded = await api.uploadFile(file);
       await api.createClaim({
         date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
-        category, amount: Number(amount), attachmentId: uploaded.attachment_id,
+        expenseType, category, amount: Number(amount), attachmentId: uploaded.attachment_id,
         ...(category === 'Travel' ? { place: place.trim() } : {}),
         ...(category === 'Stay' ? { location: location.trim() } : {}),
         ...(category === 'Others' ? { note: note.trim() } : {}),
@@ -810,7 +811,7 @@ function ClaimForm({ caps, onClose, onDone }) {
     }
   };
 
-  const incomplete = !file || !amount || Number(amount) <= 0
+  const incomplete = !expenseType || !file || !amount || Number(amount) <= 0
     || (category === 'Travel' && !place.trim())
     || (category === 'Stay' && !location.trim())
     || (category === 'Others' && !note.trim());
@@ -822,6 +823,20 @@ function ClaimForm({ caps, onClose, onDone }) {
           <div className="tight" style={{ fontSize: 18, fontWeight: 600 }}>New claim</div>
           <button className="press" onClick={onClose} style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
         </div>
+
+        <Field label="Expense Type">
+          <div style={{ display: 'flex', gap: 8 }}>
+            {['Local', 'Outstation'].map((type) => (
+              <button key={type} className="press" onClick={() => { setExpenseType(type); setProblem(null); }} style={{
+                flex: 1, padding: '10px 0', borderRadius: 8, fontSize: 13, cursor: 'pointer',
+                background: expenseType === type ? T.text : 'transparent',
+                color: expenseType === type ? T.bg : T.mute,
+                border: `1px solid ${expenseType === type ? T.text : T.line}`,
+                fontWeight: expenseType === type ? 500 : 400,
+              }}>{type}</button>
+            ))}
+          </div>
+        </Field>
 
         <Field label="Category">
           <div style={{ display: 'flex', gap: 8 }}>
@@ -1267,50 +1282,312 @@ function AWords({ isPhone }) {
 function AClaims({ isPhone }) {
   const T = useT();
   const api = useApi();
-  const [status, setStatus] = useState('Pending');
-  const claims = useResource(() => api.admin.claims(status), [status]);
+  const [selectedCycle, setSelectedCycle] = useState(null);
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [filter, setFilter] = useState('All');
   const [acting, setActing] = useState(null);
+  const cycleInfo = useResource(() => api.admin.claimCycles(), []);
 
-  const decide = async (id, decision, reason) => {
-    setActing(id);
-    try { await api.admin.decideClaim(id, { decision, ...(reason ? { reason } : {}) }, newActionKey()); await claims.reload(); }
-    catch (e) { alert(e.message); }
+  // Step 3 uses the weekly cycle data already returned by the Step 2
+  // /admin/claims endpoint. This keeps the screen compatible with the
+  // existing api-client while making the accountant view employee-first.
+  const claims = useResource(() => api.admin.claims(), []);
+  const rows = claims.data || [];
+
+  const cycles = Array.from(
+    new Map(
+      rows
+        .filter((c) => c.cycle_start)
+        .map((c) => [c.cycle_start, {
+          cycle_start: c.cycle_start,
+          cycle_end: c.cycle_end,
+        }])
+    ).values()
+  ).sort((a, b) => String(b.cycle_start).localeCompare(String(a.cycle_start)));
+
+  const activeCycle = selectedCycle || cycles[0]?.cycle_start || null;
+  const activeCycleInfo = (cycleInfo.data || []).find((c) => c.cycle_start === activeCycle);
+  const cycleClaims = rows.filter((c) => c.cycle_start === activeCycle);
+  const cycleStatus = activeCycleInfo?.status || cycleClaims[0]?.cycle_status || 'Open';
+
+  const money = (items) => items.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+
+  const localTotal = money(cycleClaims.filter((c) => c.expense_type === 'Local'));
+  const outstationTotal = money(cycleClaims.filter((c) => c.expense_type === 'Outstation'));
+  const weeklyTotal = money(cycleClaims);
+
+  const employeeMap = new Map();
+  cycleClaims.forEach((c) => {
+    const key = c.employee_id;
+    if (!employeeMap.has(key)) {
+      employeeMap.set(key, {
+        employee_id: key,
+        employee_name: c.employee_name || 'Unknown',
+        local: 0,
+        outstation: 0,
+        total: 0,
+        bill_count: 0,
+      });
+    }
+    const e = employeeMap.get(key);
+    const amount = Number(c.amount_paise || 0);
+    e.total += amount;
+    e.bill_count += 1;
+    if (c.expense_type === 'Local') e.local += amount;
+    if (c.expense_type === 'Outstation') e.outstation += amount;
+  });
+
+  const employees = Array.from(employeeMap.values()).sort((a, b) =>
+    a.employee_name.localeCompare(b.employee_name)
+  );
+
+  const employeeClaims = selectedEmployee
+    ? cycleClaims.filter((c) => c.employee_id === selectedEmployee.employee_id)
+    : [];
+
+  const visibleClaims = filter === 'All'
+    ? employeeClaims
+    : employeeClaims.filter((c) => c.expense_type === filter);
+
+  const selectedEmployeeTotals = selectedEmployee
+    ? {
+        local: money(employeeClaims.filter((c) => c.expense_type === 'Local')),
+        outstation: money(employeeClaims.filter((c) => c.expense_type === 'Outstation')),
+        total: money(employeeClaims),
+      }
+    : null;
+
+  const cycleLabel = (start, end) => {
+    if (!start) return 'Weekly Claims';
+    const s = new Date(`${start}T00:00:00Z`);
+    const e = new Date(`${end || start}T00:00:00Z`);
+    const opts = { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' };
+    return `${s.toLocaleDateString('en-IN', opts)}–${e.toLocaleDateString('en-IN', opts)}`;
+  };
+
+  const card = (label, value) => (
+    <div style={{
+      padding: 16, border: `1px solid ${T.line}`, borderRadius: 10,
+      background: T.sub, minWidth: 0,
+    }}>
+      <div className="mono" style={{
+        fontSize: 10, textTransform: 'uppercase', letterSpacing: '.12em',
+        color: T.faint, marginBottom: 8,
+      }}>{label}</div>
+      <div className="tight" style={{ fontSize: 22, fontWeight: 600 }}>{rupees(value)}</div>
+    </div>
+  );
+
+  const runCycleAction = async (action) => {
+    if (!activeCycle || acting) return;
+    setActing(action);
+    try {
+      const key = newActionKey();
+      if (action === 'review') await api.admin.reviewClaimCycle(activeCycle, key);
+      if (action === 'close') await api.admin.closeClaimCycle(activeCycle, key);
+      await Promise.all([claims.reload(), cycleInfo.reload()]);
+    } catch (e) {
+      alert(e?.message || 'Could not update the claim cycle.');
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const exportCycle = async () => {
+    if (!activeCycle || acting) return;
+    setActing('export');
+    try { await api.admin.exportClaims(activeCycle); }
+    catch (e) { alert(e?.message || 'Could not export the claim cycle.'); }
     finally { setActing(null); }
   };
 
+  if (selectedEmployee) {
+    return (
+      <>
+        <BackLink onBack={() => { setSelectedEmployee(null); setFilter('All'); }} />
+        <div style={{ marginBottom: 28 }}>
+          <div className="mono" style={{ fontSize: 11, color: T.faint, marginBottom: 8 }}>
+            {activeCycle ? cycleLabel(activeCycle, cycles.find((c) => c.cycle_start === activeCycle)?.cycle_end) : 'Weekly Claims'}
+          </div>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>
+            {selectedEmployee.employee_name}
+          </h1>
+          <div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>
+            {employeeClaims.length} bill{employeeClaims.length === 1 ? '' : 's'}
+          </div>
+        </div>
+
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(3, 1fr)',
+          gap: 12, marginBottom: 32,
+        }}>
+          {card('Local', selectedEmployeeTotals.local)}
+          {card('Outstation', selectedEmployeeTotals.outstation)}
+          {card('Total', selectedEmployeeTotals.total)}
+        </div>
+
+        <Eyebrow>Expenses</Eyebrow>
+        <div style={{
+          display: 'flex', gap: 8, borderBottom: `1px solid ${T.line}`, marginBottom: 8,
+        }}>
+          {['All', 'Local', 'Outstation'].map((k) => (
+            <button key={k} className="press" onClick={() => setFilter(k)} style={{
+              background: 'none', border: 'none', padding: '0 0 12px',
+              cursor: 'pointer', fontSize: 12,
+              color: filter === k ? T.text : T.faint,
+              fontWeight: filter === k ? 500 : 400,
+              borderBottom: filter === k ? `1.5px solid ${T.accent}` : '1.5px solid transparent',
+            }}>{k}</button>
+          ))}
+        </div>
+
+        {!visibleClaims.length
+          ? <Blank title={`No ${filter === 'All' ? '' : filter + ' '}expenses`} />
+          : (
+            <div style={{ borderTop: `1px solid ${T.line}` }}>
+              {visibleClaims.map((c) => (
+                <div key={c.claim_id} style={{
+                  display: 'flex', gap: 14, padding: '16px 0',
+                  borderBottom: `1px solid ${T.line}`, alignItems: 'flex-start',
+                }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 14, fontWeight: 500 }}>{c.category}</div>
+                      <span style={{
+                        fontSize: 10, padding: '3px 7px', borderRadius: 999,
+                        border: `1px solid ${T.line}`, color: T.mute,
+                      }}>{c.expense_type || 'Unclassified'}</span>
+                    </div>
+                    <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>
+                      {istDateShort(c.claim_date)}
+                    </M>
+                    {(c.place || c.location || c.note) && (
+                      <div style={{ fontSize: 12, color: T.mute, marginTop: 5 }}>
+                        {c.place || c.location || c.note}
+                      </div>
+                    )}
+                  </div>
+                  <M style={{ fontSize: 14, fontWeight: 500 }}>{rupees(c.amount_paise)}</M>
+                </div>
+              ))}
+            </div>
+          )}
+      </>
+    );
+  }
+
   return (
     <>
-      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 32px' }}>Claims</h1>
-      <div style={{ display: 'flex', gap: 24, borderBottom: `1px solid ${T.line}`, marginBottom: 8 }}>
-        {['Pending', 'Approved', 'Rejected'].map((s) => (
-          <button key={s} className="press" onClick={() => setStatus(s)} style={{
-            background: 'none', border: 'none', padding: '0 0 12px', cursor: 'pointer', fontSize: 12,
-            color: status === s ? T.text : T.faint, fontWeight: status === s ? 500 : 400,
-            borderBottom: status === s ? `1.5px solid ${T.accent}` : '1.5px solid transparent',
-          }}>{s}</button>
-        ))}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+        gap: 16, marginBottom: 24, flexWrap: 'wrap',
+      }}>
+        <div>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Claims</h1>
+          {activeCycle && (
+            <div style={{ fontSize: 12, color: T.mute, marginTop: 7 }}>
+              {cycleLabel(activeCycle, cycles.find((c) => c.cycle_start === activeCycle)?.cycle_end)}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: isPhone ? 'flex-start' : 'flex-end' }}>
+          {cycles.length > 0 && (
+            <select value={activeCycle || ''} onChange={(e) => { setSelectedCycle(e.target.value || null); setSelectedEmployee(null); setFilter('All'); }}
+              style={{
+                padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`,
+                background: T.bg, color: T.text, fontSize: 13, maxWidth: isPhone ? '100%' : 230,
+              }}>
+              {cycles.map((c) => (
+                <option key={c.cycle_start} value={c.cycle_start}>
+                  {cycleLabel(c.cycle_start, c.cycle_end)}
+                </option>
+              ))}
+            </select>
+          )}
+          {activeCycle && <span style={{ fontSize: 11, padding: '7px 9px', border: `1px solid ${T.line}`, borderRadius: 999, color: T.mute }}>{cycleStatus}</span>}
+          {activeCycle && cycleStatus === 'Open' && (
+            <button className="press" disabled={!!acting} onClick={() => runCycleAction('review')} style={{ padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.sub, color: T.text, cursor: acting ? 'wait' : 'pointer' }}>
+              {acting === 'review' ? 'Reviewing…' : 'Mark Reviewed'}
+            </button>
+          )}
+          {activeCycle && cycleStatus === 'Reviewed' && (
+            <button className="press" disabled={!!acting} onClick={() => runCycleAction('close')} style={{ padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.text, color: T.bg, cursor: acting ? 'wait' : 'pointer' }}>
+              {acting === 'close' ? 'Closing…' : 'Close Cycle'}
+            </button>
+          )}
+          {activeCycle && (
+            <button className="press" disabled={!!acting} onClick={exportCycle} style={{ padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, cursor: acting ? 'wait' : 'pointer' }}>
+              {acting === 'export' ? 'Exporting…' : 'Export Excel'}
+            </button>
+          )}
+        </div>
       </div>
 
-      {claims.loading ? <Rows n={3} />
+      {claims.loading ? <Rows n={5} />
         : claims.error ? <ErrorBlock error={claims.error} onRetry={claims.reload} />
-          : !claims.data.length ? <Blank title={`No ${status.toLowerCase()} claims`} />
-            : claims.data.map((c) => (
-              <div key={c.claim_id} style={{ display: 'flex', gap: isPhone ? 12 : 20, alignItems: 'flex-start', flexWrap: 'wrap', padding: '20px 0', borderBottom: `1px solid ${T.line}` }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 500 }}>{c.employee_name} · {c.category}</div>
-                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 4 }}>{istDateShort(c.claim_date)}</M>
-                  {(c.place || c.location || c.note) && <div style={{ fontSize: 13, color: T.mute, marginTop: 6 }}>{c.place || c.location || c.note}</div>}
-                </div>
-                <M style={{ fontSize: 16, fontWeight: 500 }}>{rupees(c.amount_paise)}</M>
-                {c.status === 'Pending' ? (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <Btn variant="line" busy={acting === c.claim_id}
-                      onClick={() => { const r = prompt('Reason for rejection'); if (r?.trim()) decide(c.claim_id, 'Rejected', r.trim()); }}>Reject</Btn>
-                    <Btn variant="solid" busy={acting === c.claim_id} onClick={() => decide(c.claim_id, 'Approved')}>Approve</Btn>
+          : !activeCycle ? <Blank title="No claim cycles yet" hint="Weekly claims will appear here once bills are submitted." />
+          : (
+            <>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(4, 1fr)',
+                gap: 12, marginBottom: 36,
+              }}>
+                {card('Weekly Total', weeklyTotal)}
+                {card('Local', localTotal)}
+                {card('Outstation', outstationTotal)}
+                <div style={{
+                  padding: 16, border: `1px solid ${T.line}`, borderRadius: 10,
+                  background: T.sub, minWidth: 0,
+                }}>
+                  <div className="mono" style={{
+                    fontSize: 10, textTransform: 'uppercase', letterSpacing: '.12em',
+                    color: T.faint, marginBottom: 8,
+                  }}>Employees</div>
+                  <div className="tight" style={{ fontSize: 22, fontWeight: 600 }}>{employees.length}</div>
+                  <div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>
+                    {cycleClaims.length} bill{cycleClaims.length === 1 ? '' : 's'}
                   </div>
-                ) : <Status state={c.status} />}
+                </div>
               </div>
-            ))}
+
+              <Eyebrow>Employees</Eyebrow>
+              {!employees.length ? <Blank title="No claims in this cycle" />
+                : (
+                  <div style={{ borderTop: `1px solid ${T.line}` }}>
+                    {employees.map((e) => (
+                      <button key={e.employee_id} className="row press"
+                        onClick={() => setSelectedEmployee(e)}
+                        style={{
+                          width: '100%', display: 'flex', gap: 16, alignItems: 'center',
+                          textAlign: 'left', padding: '16px 0', background: 'none',
+                          border: 'none', borderBottom: `1px solid ${T.line}`,
+                          cursor: 'pointer', color: T.text,
+                        }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 500 }}>{e.employee_name}</div>
+                          <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>
+                            {e.bill_count} bill{e.bill_count === 1 ? '' : 's'}
+                          </M>
+                        </div>
+                        <div style={{ textAlign: 'right', minWidth: isPhone ? 92 : 240 }}>
+                          {!isPhone && (
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 20, marginBottom: 4 }}>
+                              <M style={{ fontSize: 11, color: T.mute }}>Local {rupees(e.local)}</M>
+                              <M style={{ fontSize: 11, color: T.mute }}>Out {rupees(e.outstation)}</M>
+                            </div>
+                          )}
+                          <M style={{ fontSize: 14, fontWeight: 500 }}>{rupees(e.total)}</M>
+                        </div>
+                        <span style={{ color: T.faint, fontSize: 18 }} aria-hidden="true">›</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+            </>
+          )}
     </>
   );
 }
