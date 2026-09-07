@@ -72,6 +72,19 @@ const employeeSchema = z.object({
   capStay: z.number().int().min(0).max(100000).default(1500),
 }).strict();
 
+const contributionSchema = z.object({
+  workDate: isoDate,
+  entryType: z.enum(['Additional Work', 'Invoice']),
+  title: z.string().trim().min(1).max(160),
+  description: z.string().trim().min(1).max(3000),
+  invoiceNumber: z.string().trim().max(120).optional().nullable(),
+  amount: z.number().positive().max(10000000).multipleOf(0.01).optional().nullable(),
+}).strict();
+
+const contributionReplySchema = z.object({
+  message: z.string().trim().min(1).max(3000),
+}).strict();
+
 const employeeUpdateSchema = z.object({
   name: z.string().trim().min(1).max(120),
   role: z.enum(['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
@@ -997,6 +1010,49 @@ const claimCycleStart = (isoDate) => {
 };
 
 
+router.post('/contributions', idempotent(wrap(async (req, res) => {
+  const f = parse(contributionSchema, req.body);
+  const today = (await pool.query(`SELECT ist_today() AS d`)).rows[0].d;
+  if (f.workDate > today.toISOString().slice(0, 10)) {
+    throw unprocessable('You cannot submit a future date.', 'future_date');
+  }
+  const row = await tx(req.user, async (c) => {
+    const out = (await c.query(
+      `INSERT INTO employee_contributions
+         (employee_id, work_date, entry_type, title, description, invoice_number, amount_paise)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [req.user.id, f.workDate, f.entryType, f.title, f.description,
+       f.invoiceNumber || null, f.amount == null ? null : Math.round(f.amount * 100)])).rows[0];
+    await notifyAdmins(c, {
+      kind: 'contribution',
+      body: `${req.user.name || 'An employee'} submitted ${f.entryType.toLowerCase()}: ${f.title}`,
+      reqId: req.id,
+    });
+    return out;
+  });
+  res.status(201).json(row);
+})));
+
+router.get('/contributions/me', wrap(async (req, res) => {
+  const { rows } = await tx(req.user, async (c) => {
+    const items = (await c.query(
+      `SELECT contribution_id, work_date, entry_type, title, description, invoice_number,
+              amount_paise, status, created_at
+         FROM employee_contributions
+        WHERE employee_id=$1
+        ORDER BY work_date DESC, created_at DESC`, [req.user.id])).rows;
+    const replies = items.length ? (await c.query(
+      `SELECT r.reply_id, r.contribution_id, r.message, r.created_at, e.name AS author_name
+         FROM contribution_replies r
+         JOIN employees e ON e.employee_id=r.employee_id
+        WHERE r.contribution_id = ANY($1::uuid[])
+        ORDER BY r.created_at ASC`, [items.map((x) => x.contribution_id)])).rows : [];
+    return { rows: [{ items, replies }] };
+  });
+  res.json(rows[0]);
+}));
+
 router.post('/claims', idempotent(wrap(async (req, res) => {
   const f = parse(claimSchema, req.body);
   const paise = Math.round(f.amount * 100);
@@ -1086,6 +1142,44 @@ router.get('/claims/:id', uuidParam('id'), wrap(async (req, res) => {
   if (!rows[0]) throw notFound('That claim does not exist.');
   res.json(rows[0]);
 }));
+
+router.get('/admin/contributions', adminOnly, wrap(async (req, res) => {
+  const status = ['Open', 'Replied'].includes(req.query.status) ? req.query.status : null;
+  const out = await tx(req.user, async (c) => {
+    const items = (await c.query(
+      `SELECT c.contribution_id, c.work_date, c.entry_type, c.title, c.description,
+              c.invoice_number, c.amount_paise, c.status, c.created_at,
+              e.employee_id, e.employee_code, e.name AS employee_name
+         FROM employee_contributions c
+         JOIN employees e ON e.employee_id=c.employee_id
+        WHERE ($1::text IS NULL OR c.status=$1)
+        ORDER BY c.work_date DESC, c.created_at DESC`, [status])).rows;
+    const replies = items.length ? (await c.query(
+      `SELECT r.reply_id, r.contribution_id, r.message, r.created_at, e.name AS author_name
+         FROM contribution_replies r
+         JOIN employees e ON e.employee_id=r.employee_id
+        WHERE r.contribution_id = ANY($1::uuid[])
+        ORDER BY r.created_at ASC`, [items.map((x) => x.contribution_id)])).rows : [];
+    return { items, replies };
+  });
+  res.json(out);
+}));
+
+router.post('/admin/contributions/:id/reply', adminOnly, uuidParam('id'), idempotent(wrap(async (req, res) => {
+  const f = parse(contributionReplySchema, req.body);
+  const out = await tx(req.user, async (c) => {
+    const item = (await c.query(`SELECT contribution_id, employee_id FROM employee_contributions WHERE contribution_id=$1 FOR UPDATE`, [req.params.id])).rows[0];
+    if (!item) throw notFound('That contribution does not exist.');
+    const reply = (await c.query(
+      `INSERT INTO contribution_replies (contribution_id, employee_id, message)
+       VALUES ($1,$2,$3) RETURNING reply_id, contribution_id, employee_id, message, created_at`,
+      [req.params.id, req.user.id, f.message])).rows[0];
+    await c.query(`UPDATE employee_contributions SET status='Replied' WHERE contribution_id=$1`, [req.params.id]);
+    await notify(c, { recipientId: item.employee_id, kind: 'contribution_reply', body: 'Admin replied to your contribution / inconvenience entry.', reqId: req.id });
+    return reply;
+  });
+  res.status(201).json(out);
+})));
 
 router.get('/admin/claims', adminOnly, wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
@@ -1438,6 +1532,20 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         WHERE employee_id=$1 AND claim_date BETWEEN $2::date AND $3::date
         ORDER BY claim_date DESC, created_at DESC`, [req.params.id, from, to])).rows;
 
+    const contributions = (await c.query(
+      `SELECT contribution_id, work_date, entry_type, title, description, invoice_number,
+              amount_paise, status, created_at
+         FROM employee_contributions
+        WHERE employee_id=$1 AND work_date BETWEEN $2::date AND $3::date
+        ORDER BY work_date DESC, created_at DESC`, [req.params.id, from, to])).rows;
+
+    const contributionReplies = contributions.length ? (await c.query(
+      `SELECT r.reply_id, r.contribution_id, r.message, r.created_at, e.name AS author_name
+         FROM contribution_replies r
+         JOIN employees e ON e.employee_id=r.employee_id
+        WHERE r.contribution_id = ANY($1::uuid[])
+        ORDER BY r.created_at ASC`, [contributions.map((x) => x.contribution_id)])).rows : [];
+
     const latAttempts = (await c.query(
       `SELECT attempt_id, started_at, submitted_at, score, total
          FROM lat_attempts
@@ -1454,6 +1562,7 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
     const claimsTotal = claims.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
     const localTotal = claims.filter((c) => c.expense_type === 'Local').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
     const outstationTotal = claims.filter((c) => c.expense_type === 'Outstation').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+    const contributionInvoiceTotal = contributions.filter((c) => c.entry_type === 'Invoice').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
 
     return {
       employee,
@@ -1478,11 +1587,15 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         latCompleted: latAttempts.filter((a) => a.submitted_at).length,
         latScore: latAttempts.reduce((sum, a) => sum + Number(a.score || 0), 0),
         latPossible: latAttempts.reduce((sum, a) => sum + Number(a.total || 0), 0),
+        contributionsCount: contributions.length,
+        contributionInvoiceTotal,
       },
       attendance,
       schoolVisits,
       tasks,
       claims,
+      contributions,
+      contributionReplies,
       latAttempts,
     };
   });

@@ -137,6 +137,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
     createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),
+    myContributions: () => request('/contributions/me'),
+    createContribution: (body, key) => request('/contributions', { method: 'POST', body, idempotencyKey: key }),
 
     async uploadFile(file) {
       const form = new FormData();
@@ -199,6 +201,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       publishWords: (words, date) => request('/admin/lat/sets', { method: 'POST', body: { words, ...(date ? { date } : {}) } }),
       latResults: (date) => request(`/admin/lat/results${date ? `?date=${date}` : ''}`),
       testReset: (key) => request('/admin/test/reset', { method: 'POST', body: { confirm: 'RESET ALL TEST DATA' }, idempotencyKey: key }),
+      contributions: (status) => request(`/admin/contributions${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+      replyContribution: (id, body, key) => request(`/admin/contributions/${id}/reply`, { method: 'POST', body, idempotencyKey: key }),
     },
   };
 }
