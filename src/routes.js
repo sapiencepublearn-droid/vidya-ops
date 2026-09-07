@@ -616,19 +616,16 @@ const schoolHistorySchema = z.object({
     keyPersonPhone: z.string().trim().max(40).optional().nullable(),
   }).default({}),
   booksPayment: z.object({
-    deliveryDate: z.string().trim().max(40).optional().nullable(),
-    creditNote: z.string().trim().max(120).optional().nullable(),
-    paymentMode: z.string().trim().max(120).optional().nullable(),
     lkg: z.string().trim().max(120).optional().nullable(),
+    lkgHhp: z.string().trim().max(120).optional().nullable(),
+    ukgHhp: z.string().trim().max(120).optional().nullable(),
+    deliveryDate: z.string().trim().max(40).optional().nullable(),
+    pyCredit: z.string().trim().max(120).optional().nullable(),
+    spInvoiceValueMo: z.string().trim().max(120).optional().nullable(),
+    total2526: z.string().trim().max(120).optional().nullable(),
     lkgAdditionalOrders: z.string().trim().max(120).optional().nullable(),
     lkgReturns: z.string().trim().max(120).optional().nullable(),
     lkgRemarks: z.string().trim().max(500).optional().nullable(),
-    lkgHhp: z.string().trim().max(120).optional().nullable(),
-    lkgHhpAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    lkgHhpReturns: z.string().trim().max(120).optional().nullable(),
-    ukgHhp: z.string().trim().max(120).optional().nullable(),
-    ukgHhpAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    ukgHhpReturns: z.string().trim().max(120).optional().nullable(),
     ukg: z.string().trim().max(120).optional().nullable(),
     ukgAdditionalOrders: z.string().trim().max(120).optional().nullable(),
     ukgReturns: z.string().trim().max(120).optional().nullable(),
@@ -638,9 +635,6 @@ const schoolHistorySchema = z.object({
     discountReturns: z.string().trim().max(120).optional().nullable(),
     discountRemarks: z.string().trim().max(500).optional().nullable(),
     spInvoiceValue2526: z.string().trim().max(120).optional().nullable(),
-    spInvoiceValueMo: z.string().trim().max(120).optional().nullable(),
-    spInvoiceValueAo: z.string().trim().max(120).optional().nullable(),
-    spInvoiceValue2526Total: z.string().trim().max(120).optional().nullable(),
     spInvoiceValueAdditionalOrders: z.string().trim().max(120).optional().nullable(),
     amountReceived: z.string().trim().max(120).optional().nullable(),
     amountReceivedDate: z.string().trim().max(40).optional().nullable(),
@@ -662,7 +656,7 @@ const schoolHistorySchema = z.object({
     whatsapp: z.string().trim().max(120).optional().nullable(),
     whatsappDate: z.string().trim().max(40).optional().nullable(),
     windowsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
-    kidsApp: z.object({ count: z.string().trim().max(120).optional().nullable(), appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
+    kidsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
     appComments: z.string().trim().max(1000).optional().nullable(),
   }).default({}),
   deliverables3: z.object({
@@ -674,17 +668,22 @@ const schoolHistorySchema = z.object({
   services: z.object({
     t1: z.string().trim().max(120).optional().nullable(),
     atu1: z.string().trim().max(120).optional().nullable(),
+    atu1Date: z.string().trim().max(40).optional().nullable(),
     atu1Comments: z.string().trim().max(1000).optional().nullable(),
     sim1: z.string().trim().max(120).optional().nullable(),
+    sim1Date: z.string().trim().max(40).optional().nullable(),
     sim1Comments: z.string().trim().max(1000).optional().nullable(),
     t2: z.string().trim().max(120).optional().nullable(),
     generalVisit: z.string().trim().max(120).optional().nullable(),
     atu2: z.string().trim().max(120).optional().nullable(),
+    atu2Date: z.string().trim().max(40).optional().nullable(),
     atu2Comments: z.string().trim().max(1000).optional().nullable(),
     sim2: z.string().trim().max(120).optional().nullable(),
+    sim2Date: z.string().trim().max(40).optional().nullable(),
     sim2Comments: z.string().trim().max(1000).optional().nullable(),
     t3: z.string().trim().max(120).optional().nullable(),
     sim3: z.string().trim().max(120).optional().nullable(),
+    sim3Date: z.string().trim().max(40).optional().nullable(),
     sim3Comments: z.string().trim().max(1000).optional().nullable(),
   }).default({}),
   currentStatus: z.string().trim().max(300).optional().nullable(),
@@ -1813,15 +1812,15 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
 
     const tasks = (await c.query(
       `SELECT task_id, task_code, title, work_date AS due_date, due_time,
-              outcome AS status, NULL::timestamptz AS started_at,
+              outcome::text AS status, NULL::timestamptz AS started_at,
               NULL::timestamptz AS submitted_at, NULL::timestamptz AS completed_at,
-              outcome AS effective_status
+              outcome::text AS effective_status
          FROM task_daily_log l
          JOIN tasks t ON t.task_id=l.task_id
         WHERE l.employee_id=$1 AND l.work_date BETWEEN $2::date AND $3::date
         UNION ALL
-       SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time, t.status,
-              t.started_at, t.submitted_at, t.completed_at, t.effective_status
+       SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time, t.status::text AS status,
+              t.started_at, t.submitted_at, t.completed_at, t.effective_status::text AS effective_status
          FROM v_tasks t
         WHERE t.assigned_to=$1 AND t.due_date BETWEEN $2::date AND $3::date
           AND NOT EXISTS (

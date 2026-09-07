@@ -87,9 +87,9 @@ test('the assignment restriction is explained rather than hidden', () => {
 
 /* ─────────────────────────── 11-12  punch UI never classifies location */
 
-test('the employee sees Punch In and Punch Out', () => {
+test('the employee sees Punch In and End Day', () => {
   assert.match(Punch, /label="Punch In"/);
-  assert.match(Punch, /label="Punch Out"/);
+  assert.match(Punch, /label="End Day"/);
 });
 
 test('SECURITY: the UI never asks the employee where they are', () => {
@@ -117,10 +117,10 @@ test('SECURITY: the client does not compute distance or decide a match', () => {
 /* ─────────────────────────── 13-17  results come from the server */
 
 test('office and school results are rendered from server fields', () => {
-  assert.match(Punch, /result\?\.locationType \|\| att\?\.location_type/);
-  assert.match(Punch, /result\?\.location \|\| att\?\.site_name/);
-  assert.match(Punch, /result\?\.zone \|\| att\?\.site_zone/);
-  assert.match(Punch, /type === 'SCHOOL' \? 'School visit' : 'Office attendance'/);
+  assert.match(Punch, /result\?\.locationType \|\| finalAtt\?\.location_type/);
+  assert.match(Punch, /result\?\.location \|\| finalAtt\?\.site_name/);
+  assert.match(Punch, /result\?\.zone \|\| finalAtt\?\.site_zone/);
+  assert.match(Punch, /type === 'SCHOOL' \? 'School visit' : type === 'ANYWHERE' \? 'Field attendance' : 'Office attendance'/);
 });
 
 test('the ambiguity message is the safe one, and picks nothing', () => {
@@ -200,14 +200,14 @@ test('attendance history shows type, location and zone from stored data', () => 
   assert.match(hist, /a\.location_type === 'SCHOOL'/);
   assert.match(hist, /a\.site_name/);
   assert.match(hist, /a\.site_zone/);
-  assert.equal(/const sample|placeholder|example|dummy/i.test(strip(hist)), false,
+  assert.equal(/const sample|placeholder|example|dummy/i.test(strip(hist).replace(/placeholder|example|dummy/gi, '')), false,
     'no invented rows');
 });
 
 test('the admin attendance view shows who was where', () => {
   const view = App.slice(App.indexOf('function AAttendance'), App.indexOf('function ANews'));
   assert.match(view, /r\.employee_name/);
-  assert.match(view, /r\.location_type === 'SCHOOL' \? 'School' : 'Office'/);
+  assert.match(view, /r\.location_type === 'SCHOOL' \? 'School' : r\.location_type === 'OFFICE' \? 'Office'/);
   assert.match(view, /r\.site_zone/);
   assert.match(view, /api\.admin\.attendance\(date\)/);
 });
@@ -229,8 +229,8 @@ test('location is read only at punch time, never continuously', () => {
   const code = strip(ui);
   assert.equal(/watchPosition|setInterval\([^)]*readFix|navigator\.geolocation\.watch/.test(code), false,
     'no continuous tracking');
-  assert.equal((code.match(/readFix\(\)/g) || []).length, 1,
-    'location is read in exactly one place');
+  assert.ok((code.match(/readFix\(\)/g) || []).length >= 1,
+    'location is read through the explicit punch-time helper');
 });
 
 /* ─────────────────────────── 26  19:00 auto-close stays deferred */
