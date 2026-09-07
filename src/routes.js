@@ -61,7 +61,7 @@ const claimSchema = z.object({
 
 const employeeSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  role: z.enum(['Trainer', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
+  role: z.enum(['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
   email: z.string().email().max(160),
   phone: z.string().trim().max(30).optional(),
   password: z.string(),
@@ -74,7 +74,7 @@ const employeeSchema = z.object({
 
 const employeeUpdateSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  role: z.enum(['Trainer', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
+  role: z.enum(['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
   email: z.string().email().max(160),
   phone: z.string().trim().max(30).optional().nullable(),
   status: z.enum(['Active', 'Inactive']).default('Active'),
@@ -154,6 +154,16 @@ router.get('/me', wrap(async (req, res) => {
 }));
 
 /* ───────────────────────────────────────────────────────── attendance */
+
+function validateOpenFix(fix) {
+  if (fix.isMocked) {
+    throw unprocessable('This device is reporting a mock location. Turn off the mock location app and try again.', 'mock_location');
+  }
+  if (fix.accuracy > config.maxAccuracyMetres) {
+    throw unprocessable(`The GPS reading is accurate to only ${Math.round(fix.accuracy)} m. Move outside and try again.`, 'poor_accuracy');
+  }
+  return fix;
+}
 
 async function permittedSites(actor) {
   // Assignment-restricted, unchanged from the existing model: an employee
@@ -243,19 +253,22 @@ router.get('/attendance/sites', wrap(async (req, res) => {
 
 router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
-  const sites = await permittedSites(req.user);
-  const { site, distance } = verifyFix(sites, fix);
+  const emp = (await tx(req.user, (c) => c.query(
+    `SELECT role, shift_start, late_grace_minutes FROM employees WHERE employee_id = $1`,
+    [req.user.id]))).rows[0];
+  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
+  const cleanFix = validateOpenFix(fix);
+  const sites = anywhere ? [] : await permittedSites(req.user);
+  const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
+  const { site, distance } = matched;
 
   const result = await tx(req.user, async (c) => {
-    const emp = (await c.query(
-      `SELECT role, shift_start, late_grace_minutes FROM employees WHERE employee_id = $1`,
-      [req.user.id])).rows[0];
 
     const late = (await c.query(
       `SELECT (now() AT TIME ZONE 'Asia/Kolkata')::time > ($1::time + make_interval(mins => $2)) AS late`,
       [emp.shift_start, emp.late_grace_minutes])).rows[0].late;
 
-    const status = emp.role === 'Trainer' ? 'Field Work' : late ? 'Late' : 'Present';
+    const status = (emp.role === 'Trainer' || emp.role === 'Technical Support') ? 'Field Work' : late ? 'Late' : 'Present';
 
     // Single atomic statement. Two concurrent requests cannot both win:
     // the unique index on (employee_id, work_date) decides, and the loser
@@ -283,18 +296,29 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   // The server reports what it matched. The client never chose it.
   res.status(201).json({
     attendance: result,
-    locationType: site.kind === 'office' ? 'OFFICE' : 'SCHOOL',
-    location: site.name, zone: site.zone ?? null,
-    site: site.name, distanceMetres: distance,
+    locationType: site ? (site.kind === 'office' ? 'OFFICE' : 'SCHOOL') : 'ANYWHERE',
+    location: site?.name ?? 'Field / Any location', zone: site?.zone ?? null,
+    site: site?.name ?? null, distanceMetres: distance,
   });
 })));
 
 router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
-  const sites = await permittedSites(req.user);
-  const { site, distance } = verifyFix(sites, fix);
+  const emp = (await tx(req.user, (c) => c.query(
+    `SELECT role FROM employees WHERE employee_id = $1`, [req.user.id]))).rows[0];
+  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
+  const cleanFix = validateOpenFix(fix);
+  const sites = anywhere ? [] : await permittedSites(req.user);
+  const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
+  const { site, distance } = matched;
 
   const row = await tx(req.user, async (c) => {
+    if (emp.role === 'Trainer') {
+      const openVisit = (await c.query(
+        `SELECT visit_id FROM school_visits WHERE employee_id=$1 AND work_date=ist_today() AND check_in_time IS NOT NULL AND check_out_time IS NULL LIMIT 1`,
+        [req.user.id])).rows[0];
+      if (openVisit) throw conflict('Please check out from the school visit before punching out.', 'school_visit_open');
+    }
     const cur = (await c.query(
       `SELECT attendance_id, check_in_time, check_out_time FROM attendance
         WHERE employee_id = $1 AND work_date = ist_today() FOR UPDATE`, [req.user.id])).rows[0];
@@ -316,9 +340,9 @@ router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
 
   res.json({
     attendance: row,
-    locationType: site.kind === 'office' ? 'OFFICE' : 'SCHOOL',
-    location: site.name, zone: site.zone ?? null,
-    site: site.name, distanceMetres: distance,
+    locationType: site ? (site.kind === 'office' ? 'OFFICE' : 'SCHOOL') : 'ANYWHERE',
+    location: site?.name ?? 'Field / Any location', zone: site?.zone ?? null,
+    site: site?.name ?? null, distanceMetres: distance,
     visitDraft: visit?.kind === 'school'
       ? buildVisitDraft({ school: visit.name, zone: visit.zone,
           checkIn: row.check_in_time, checkOut: row.check_out_time })
@@ -349,6 +373,66 @@ function buildVisitDraft({ school, zone, checkIn, checkOut }) {
     'School visit completed.',
   ].join('\n');
 }
+
+router.get('/attendance/school-visits/today', wrap(async (req, res) => {
+  const emp = (await tx(req.user, (c) => c.query(
+    `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
+  if (emp.role !== 'Trainer') return res.json({ schools: [], active: null, visits: [] });
+
+  const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT v.*, l.name AS school_name, l.zone AS school_zone
+       FROM school_visits v JOIN locations l ON l.location_id=v.location_id
+      WHERE v.employee_id=$1 AND v.work_date=ist_today()
+      ORDER BY v.check_in_time DESC`, [req.user.id]));
+  res.json({
+    schools: sites.map((s) => ({ id: s.id, name: s.name, zone: s.zone, lat: s.lat, lng: s.lng, radius: s.radius })),
+    active: rows.find((v) => v.check_in_time && !v.check_out_time) || null,
+    visits: rows,
+  });
+}));
+
+router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, res) => {
+  const f = parse(fixSchema.extend({ locationId: uuid }).strict(), req.body);
+  const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
+  if (emp.role !== 'Trainer') throw forbidden('School visits are available only to trainers.');
+  const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const site = sites.find((s) => s.id === f.locationId);
+  if (!site) throw forbidden('That school is not assigned to you today.', 'school_not_assigned');
+  const { distance } = verifyFix([site], f);
+  const row = await tx(req.user, async (c) => {
+    const open = (await c.query(
+      `SELECT visit_id FROM school_visits WHERE employee_id=$1 AND work_date=ist_today() AND check_in_time IS NOT NULL AND check_out_time IS NULL LIMIT 1`,
+      [req.user.id])).rows[0];
+    if (open) throw conflict('You already have a school visit in progress.', 'school_visit_open');
+    return (await c.query(
+      `INSERT INTO school_visits (employee_id, work_date, location_id, check_in_time, check_in_latitude, check_in_longitude, check_in_accuracy, check_in_distance_m)
+       VALUES ($1, ist_today(), $2, now(), $3,$4,$5,$6) RETURNING *`,
+      [req.user.id, site.id, f.latitude, f.longitude, f.accuracy, distance])).rows[0];
+  });
+  res.status(201).json({ visit: row, school: site.name, zone: site.zone, distanceMetres: distance });
+})));
+
+router.post('/attendance/school-visits/check-out', idempotent(wrap(async (req, res) => {
+  const f = parse(fixSchema.extend({ visitId: uuid }).strict(), req.body);
+  const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
+  if (emp.role !== 'Trainer') throw forbidden('School visits are available only to trainers.');
+  const clean = validateOpenFix(f);
+  const row = await tx(req.user, async (c) => {
+    const cur = (await c.query(
+      `SELECT v.*, l.name AS school_name, l.zone AS school_zone, l.latitude, l.longitude, l.radius_metres
+         FROM school_visits v JOIN locations l ON l.location_id=v.location_id
+        WHERE v.visit_id=$1 AND v.employee_id=$2 FOR UPDATE`, [f.visitId, req.user.id])).rows[0];
+    if (!cur) throw notFound('School visit not found.');
+    if (cur.check_out_time) throw conflict('This school visit is already checked out.', 'already_checked_out');
+    const distance = metresBetween({ lat: clean.latitude, lng: clean.longitude }, { lat: Number(cur.latitude), lng: Number(cur.longitude) });
+    if (distance > cur.radius_metres) throw unprocessable(`You are ${distance} m from ${cur.school_name}. Check-out is allowed within ${cur.radius_metres} m.`, 'outside_radius');
+    return (await c.query(
+      `UPDATE school_visits SET check_out_time=now(), check_out_latitude=$2, check_out_longitude=$3, check_out_accuracy=$4, check_out_distance_m=$5 WHERE visit_id=$1 RETURNING *`,
+      [f.visitId, clean.latitude, clean.longitude, clean.accuracy, distance])).rows[0];
+  });
+  res.json({ visit: row });
+})));
 
 router.get('/attendance/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
@@ -1300,6 +1384,110 @@ router.get('/admin/employees', adminOnly, wrap(async (req, res) => {
     `SELECT employee_id, employee_code, name, role, email, is_admin, status, claims_enabled,
             cap_food, cap_stay FROM employees ORDER BY employee_code`);
   res.json(rows);
+}));
+
+
+/**
+ * Read-only employee dashboard. Admin opens it from the Today/Team screens,
+ * chooses a date range, and gets one consolidated summary of attendance,
+ * school visits, tasks, claims and LAT.
+ */
+router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(async (req, res) => {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : null;
+  if (!from || !to) throw unprocessable('Choose a valid From and To date.', 'invalid_date_range');
+  if (from > to) throw unprocessable('From date cannot be after To date.', 'invalid_date_range');
+  const rangeDays = Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000) + 1;
+  if (rangeDays > 366) throw unprocessable('Choose a date range of one year or less.', 'range_too_large');
+
+  const out = await tx(req.user, async (c) => {
+    const employee = (await c.query(
+      `SELECT employee_id, employee_code, name, role, email, phone, status, claims_enabled
+         FROM employees WHERE employee_id=$1`, [req.params.id])).rows[0];
+    if (!employee) throw notFound('That employee does not exist.');
+
+    const attendance = (await c.query(
+      `SELECT a.attendance_id, a.work_date, a.check_in_time, a.check_out_time, a.status,
+              a.check_in_accuracy, a.check_out_accuracy,
+              li.name AS check_in_site, li.kind AS check_in_kind,
+              lo.name AS check_out_site, lo.kind AS check_out_kind
+         FROM attendance a
+         LEFT JOIN locations li ON li.location_id=a.check_in_location_id
+         LEFT JOIN locations lo ON lo.location_id=a.check_out_location_id
+        WHERE a.employee_id=$1 AND a.work_date BETWEEN $2::date AND $3::date
+        ORDER BY a.work_date DESC`, [req.params.id, from, to])).rows;
+
+    const schoolVisits = (await c.query(
+      `SELECT v.visit_id, v.work_date, v.check_in_time, v.check_out_time,
+              v.check_in_accuracy, v.check_out_accuracy, l.name AS school_name, l.zone AS school_zone
+         FROM school_visits v
+         JOIN locations l ON l.location_id=v.location_id
+        WHERE v.employee_id=$1 AND v.work_date BETWEEN $2::date AND $3::date
+        ORDER BY v.work_date DESC, v.check_in_time DESC`, [req.params.id, from, to])).rows;
+
+    const tasks = (await c.query(
+      `SELECT task_id, task_code, title, due_date, due_time, status, started_at, submitted_at, completed_at,
+              effective_status
+         FROM v_tasks
+        WHERE assigned_to=$1 AND due_date BETWEEN $2::date AND $3::date
+        ORDER BY due_date DESC, due_time DESC`, [req.params.id, from, to])).rows;
+
+    const claims = (await c.query(
+      `SELECT claim_id, claim_date, expense_type, category, amount_paise, place, location, note
+         FROM claims
+        WHERE employee_id=$1 AND claim_date BETWEEN $2::date AND $3::date
+        ORDER BY claim_date DESC, created_at DESC`, [req.params.id, from, to])).rows;
+
+    const latAttempts = (await c.query(
+      `SELECT attempt_id, started_at, submitted_at, score, total
+         FROM lat_attempts
+        WHERE employee_id=$1
+          AND (started_at AT TIME ZONE 'Asia/Kolkata')::date BETWEEN $2::date AND $3::date
+        ORDER BY started_at DESC`, [req.params.id, from, to])).rows;
+
+    const hoursBetween = (a, b) => a && b ? Math.max(0, (new Date(b) - new Date(a)) / 3600000) : 0;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const attendanceDays = attendance.filter((a) => a.check_in_time).length;
+    const completedAttendance = attendance.filter((a) => a.check_in_time && a.check_out_time);
+    const totalHours = round2(completedAttendance.reduce((sum, a) => sum + hoursBetween(a.check_in_time, a.check_out_time), 0));
+    const visitHours = round2(schoolVisits.reduce((sum, v) => sum + hoursBetween(v.check_in_time, v.check_out_time), 0));
+    const claimsTotal = claims.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+    const localTotal = claims.filter((c) => c.expense_type === 'Local').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+    const outstationTotal = claims.filter((c) => c.expense_type === 'Outstation').reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+
+    return {
+      employee,
+      range: { from, to },
+      summary: {
+        attendanceDays,
+        completedDays: completedAttendance.length,
+        lateDays: attendance.filter((a) => a.status === 'Late').length,
+        fieldDays: attendance.filter((a) => a.status === 'Field Work').length,
+        totalHours,
+        schoolVisits: schoolVisits.length,
+        visitHours,
+        tasksAssigned: tasks.length,
+        tasksCompleted: tasks.filter((t) => t.effective_status === 'Completed').length,
+        tasksSubmitted: tasks.filter((t) => t.effective_status === 'Submitted').length,
+        tasksOverdue: tasks.filter((t) => t.effective_status === 'Overdue').length,
+        claimsTotal,
+        localTotal,
+        outstationTotal,
+        claimCount: claims.length,
+        latAttempts: latAttempts.length,
+        latCompleted: latAttempts.filter((a) => a.submitted_at).length,
+        latScore: latAttempts.reduce((sum, a) => sum + Number(a.score || 0), 0),
+        latPossible: latAttempts.reduce((sum, a) => sum + Number(a.total || 0), 0),
+      },
+      attendance,
+      schoolVisits,
+      tasks,
+      claims,
+      latAttempts,
+    };
+  });
+
+  res.json(out);
 }));
 
 router.patch('/admin/employees/:id', adminOnly, uuidParam('id'), wrap(async (req, res) => {

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { newActionKey, readFix } from './api-client.js';
 
 /**
@@ -50,13 +50,15 @@ function messageFor(e) {
   }
 }
 
-export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M, Btn }) {
+export function PunchPanel({ T, api, att, role, loading, error, onDone, onRetryLoad, M, Btn }) {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(null);
   const [problem, setProblem] = useState(null);
   const [result, setResult] = useState(null);     // punch-in or punch-out response
   const [reporting, setReporting] = useState(false);
   const [reported, setReported] = useState(false);
+  const fieldRole = role === 'Trainer' || role === 'Technical Support';
+  const isTrainer = role === 'Trainer';
   // Held across retries of one tap, so a lost response cannot double-punch.
   const actionKey = useRef(null);
 
@@ -73,7 +75,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
     try {
       setStage('Getting location…');
       const fix = await readFix();
-      setStage(mode === 'in' ? 'Checking attendance location…' : 'Completing attendance…');
+      setStage(mode === 'in' ? (fieldRole ? 'Recording your punch in…' : 'Checking attendance location…') : (fieldRole ? 'Recording your punch out…' : 'Completing attendance…'));
       const r = mode === 'in'
         ? await api.checkIn(fix, actionKey.current)
         : await api.checkOut(fix, actionKey.current);
@@ -141,7 +143,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
     return (
       <div style={{ marginBottom: 40 }}>
         <div className="mono" style={label}>
-          {type === 'SCHOOL' ? 'School visit' : 'Office attendance'}
+          {type === 'SCHOOL' ? 'School visit' : type === 'ANYWHERE' ? 'Field attendance' : 'Office attendance'}
         </div>
         <div className="tight" style={{ fontSize: 34, fontWeight: 600, lineHeight: 1, marginBottom: 10 }}>
           {istTime(att.check_in_time)}
@@ -154,6 +156,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
           {att.status}{att.check_in_accuracy ? ` · ±${att.check_in_accuracy} m` : ''}
         </M>
 
+        {isTrainer && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
         <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('out')}
           label="Punch Out" variant="line" />
         <Problem T={T} problem={problem} reported={reported} reporting={reporting}
@@ -168,7 +171,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
       <div className="mono" style={label}>Attendance</div>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 6 }}>Not punched in</div>
       <div style={{ fontSize: 13, color: T.mute, marginBottom: 20, lineHeight: 1.6 }}>
-        Press Punch In. Your location is read once and the office or school is worked out for you.
+        Press Punch In. Your GPS is recorded, but Trainers and Technical Support are not restricted to a designated punch location.
       </div>
       <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('in')}
         label="Punch In" variant="accent" />
@@ -230,6 +233,61 @@ function Problem({ T, problem, reported, reporting, onRetry, onReport, Btn, M })
   );
 }
 
+/* ─────────────────────────────────────────── trainer school visits */
+
+function SchoolVisitPanel({ T, api, M, Btn }) {
+  const [data, setData] = useState(null);
+  const [schoolId, setSchoolId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = async () => {
+    try { setError(null); setData(await api.schoolVisitsToday()); }
+    catch (e) { setError(e); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const fix = () => readFix();
+  const start = async () => {
+    if (!schoolId) return;
+    setBusy(true); setError(null);
+    try { await api.schoolVisitCheckIn({ ...(await fix()), locationId: schoolId }, newActionKey()); await load(); }
+    catch (e) { setError(e); }
+    finally { setBusy(false); }
+  };
+  const finish = async () => {
+    if (!data?.active) return;
+    setBusy(true); setError(null);
+    try { await api.schoolVisitCheckOut({ ...(await fix()), visitId: data.active.visit_id }, newActionKey()); await load(); }
+    catch (e) { setError(e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 24, paddingTop: 20, marginBottom: 20 }}>
+      <div className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em', color: T.faint, marginBottom: 10 }}>School Visit</div>
+      {data?.active ? (
+        <>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{data.active.school_name}</div>
+          {data.active.school_zone && <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 3 }}>{data.active.school_zone}</M>}
+          <M style={{ fontSize: 11, color: T.mute, display: 'block', marginTop: 8 }}>Checked in at {istTime(data.active.check_in_time)}</M>
+          <div style={{ marginTop: 14 }}><Btn variant="line" busy={busy} onClick={finish}>School Check Out</Btn></div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>At the assigned school, select it and check in. Check out when you leave the school.</div>
+          <select value={schoolId} onChange={(e) => setSchoolId(e.target.value)} disabled={busy} style={{ width: '100%', padding: '12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, marginBottom: 10 }}>
+            <option value="">Select school</option>
+            {(data?.schools || []).map((s) => <option key={s.id} value={s.id}>{s.name}{s.zone ? ` · ${s.zone}` : ''}</option>)}
+          </select>
+          <Btn busy={busy} onClick={start} disabled={!schoolId}>School Check In</Btn>
+        </>
+      )}
+      {error && <div style={{ color: T.accent, fontSize: 12, marginTop: 10 }}>{error.message}</div>}
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────── completed attendance */
 
 function Completed({ T, att, result, M, Btn, label }) {
@@ -242,7 +300,7 @@ function Completed({ T, att, result, M, Btn, label }) {
     <div className="pop" style={{ marginBottom: 40 }}>
       <div className="mono" style={label}>Attendance completed</div>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>
-        {type === 'SCHOOL' ? 'School visit' : 'Office attendance'}
+        {type === 'SCHOOL' ? 'School visit' : type === 'ANYWHERE' ? 'Field attendance' : 'Office attendance'}
       </div>
 
       <div style={{ display: 'grid', gap: 12, marginBottom: 24 }}>

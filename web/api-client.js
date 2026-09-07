@@ -118,6 +118,9 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     sites: () => request('/attendance/sites'),
     checkIn: (fix, key) => request('/attendance/check-in', { method: 'POST', body: fix, idempotencyKey: key }),
     checkOut: (fix, key) => request('/attendance/check-out', { method: 'POST', body: fix, idempotencyKey: key }),
+    schoolVisitsToday: () => request('/attendance/school-visits/today'),
+    schoolVisitCheckIn: (body, key) => request('/attendance/school-visits/check-in', { method: 'POST', body, idempotencyKey: key }),
+    schoolVisitCheckOut: (body, key) => request('/attendance/school-visits/check-out', { method: 'POST', body, idempotencyKey: key }),
     reportIncident: (body, key) => request('/attendance/incidents', { method: 'POST', body, idempotencyKey: key }),
     myIncidents: () => request('/attendance/incidents/me'),
     myAttendance: (month) => request(`/attendance/me${month ? `?month=${month}` : ''}`),
@@ -157,6 +160,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       employees: () => request('/admin/employees'),
       createEmployee: (body) => request('/admin/employees', { method: 'POST', body }),
       updateEmployee: (id, body) => request(`/admin/employees/${id}`, { method: 'PATCH', body }),
+      employeeDashboard: (id, from, to) => request(`/admin/employees/${id}/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
       createTask: (body) => request('/tasks', { method: 'POST', body }),
       claims: ({ status, cycle } = {}) => {
         const qs = new URLSearchParams();

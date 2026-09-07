@@ -464,7 +464,7 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews
 
       <BroadcastCard T={T} broadcasts={broadcasts} onOpen={onOpenNews} />
 
-      <PunchPanel T={T} api={api} att={att} loading={attendance.loading} error={attendance.error}
+      <PunchPanel T={T} api={api} att={att} role={profile.data?.role || me?.role} loading={attendance.loading} error={attendance.error}
         onDone={attendance.reload} onRetryLoad={attendance.reload} M={M} Btn={Btn} />
 
       <LatCard T={T} lat={lat} onOpen={onOpenLat} />
@@ -684,7 +684,7 @@ function EAttendance({ profile }) {
     <div style={{ padding: '32px 24px 0' }}>
       <h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: '0 0 32px' }}>Attendance</h1>
       <div style={{ fontSize: 12, color: T.mute, marginBottom: 24 }}>
-        {profile.data ? `${profile.data.site_name}, ${profile.data.radius_metres} m radius` : ''}
+        {profile.data ? ((profile.data.role === 'Trainer' || profile.data.role === 'Technical Support') ? 'Punch in/out from any location' : `${profile.data.site_name}, ${profile.data.radius_metres} m radius`) : ''}
       </div>
       <Eyebrow>History</Eyebrow>
       {history.loading ? <Rows n={5} />
@@ -698,7 +698,7 @@ function EAttendance({ profile }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {/* Type, place and zone as the server recorded them. */}
                       <div style={{ fontSize: 13 }}>
-                        {a.location_type === 'SCHOOL' ? 'School' : a.location_type === 'OFFICE' ? 'Office' : '—'}
+                        {a.location_type === 'SCHOOL' ? 'School' : a.location_type === 'OFFICE' ? 'Office' : (a.role === 'Trainer' || a.role === 'Technical Support') ? 'Field' : '—'}
                         {a.site_name ? ` · ${a.site_name}` : ''}
                       </div>
                       {a.site_zone && (
@@ -947,6 +947,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   const isPhone = useIsPhone();
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [employeeDashboardId, setEmployeeDashboardId] = useState(null);
   const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'LAT'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit'], ['tools', 'Tools']];
 
   const body = (
@@ -955,7 +956,8 @@ function Admin({ me, onOut, theme, setTheme }) {
       padding: isPhone ? '24px 20px 92px' : '48px 48px',
       maxWidth: isPhone ? '100%' : 1100,
     }}>
-      {page === 'dashboard' && <ADash isPhone={isPhone} />}
+      {page === 'dashboard' && !employeeDashboardId && <ADash isPhone={isPhone} onEmployee={(id) => setEmployeeDashboardId(id)} />}
+      {page === 'dashboard' && employeeDashboardId && <EmployeeDashboard employeeId={employeeDashboardId} isPhone={isPhone} onBack={() => setEmployeeDashboardId(null)} />}
       {page === 'attendance' && <AAttendance isPhone={isPhone} />}
       {page === 'schools' && <ASchools isPhone={isPhone} />}
       {page === 'news' && <ANews isPhone={isPhone} />}
@@ -1139,7 +1141,7 @@ function Admin({ me, onOut, theme, setTheme }) {
       <aside style={{ width: 210, flexShrink: 0, borderRight: `1px solid ${T.line}`, padding: '28px 20px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ marginBottom: 36 }}><Brand size={24} /></div>
         {nav.map(([k, label]) => (
-          <button key={k} className="press" onClick={() => setPage(k)} style={{
+          <button key={k} className="press" onClick={() => { setEmployeeDashboardId(null); setPage(k); }} style={{
             background: 'none', border: 'none', textAlign: 'left', padding: '8px 0', cursor: 'pointer',
             fontSize: 14, color: page === k ? T.text : T.mute, fontWeight: page === k ? 500 : 400,
           }}>{label}</button>
@@ -1156,7 +1158,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   );
 }
 
-function ADash({ isPhone }) {
+function ADash({ isPhone, onEmployee }) {
   const T = useT();
   const api = useApi();
   const dash = useResource(() => api.admin.dashboard(), []);
@@ -1191,21 +1193,146 @@ function ADash({ isPhone }) {
       <Eyebrow>Team</Eyebrow>
       <div style={{ borderTop: `1px solid ${T.line}` }}>
         {board.map((b) => (
-          <div key={b.employee_id} className="row" style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+          <button key={b.employee_id} className="row press" onClick={() => onEmployee?.(b.employee_id)} style={{ width: '100%', textAlign: 'left', padding: '14px 0', border: 'none', borderBottom: `1px solid ${T.line}`, background: 'none', color: T.text, cursor: 'pointer' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 500 }}>{b.name}</div>
                 <div style={{ fontSize: 12, color: T.mute, marginTop: 2 }}>{b.role}</div>
               </div>
               <Status state={b.attendance_status} />
+              <span style={{ color: T.faint, fontSize: 18 }}>›</span>
             </div>
             <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
               <M style={{ fontSize: 12, color: T.mute }}>{b.completed}/{b.tasks_assigned} done</M>
               {Number(b.overdue) > 0 && <M style={{ fontSize: 12, color: T.accent }}>{b.overdue} overdue</M>}
             </div>
-          </div>
+          </button>
         ))}
       </div>
+    </>
+  );
+}
+
+
+function EmployeeDashboard({ employeeId, isPhone, onBack }) {
+  const T = useT();
+  const api = useApi();
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const [from, setFrom] = useState(monthStart);
+  const [to, setTo] = useState(today);
+  const report = useResource(() => api.admin.employeeDashboard(employeeId, from, to), [employeeId, from, to]);
+
+  const quick = (kind) => {
+    if (kind === 'today') { setFrom(today); setTo(today); return; }
+    if (kind === 'week') {
+      const d = new Date(`${today}T00:00:00Z`);
+      const dow = d.getUTCDay();
+      d.setUTCDate(d.getUTCDate() - ((dow + 6) % 7));
+      setFrom(d.toISOString().slice(0, 10)); setTo(today); return;
+    }
+    setFrom(monthStart); setTo(today);
+  };
+  const fmtHours = (h) => `${Math.floor(Number(h || 0))}h ${Math.round((Number(h || 0) % 1) * 60)}m`;
+  const fmtMoney = (p) => rupees(p);
+  const dateText = (d) => d ? new Date(`${String(d).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+  const timeText = (d) => d ? istTime(d) : '—';
+  const dayKey = (d) => String(d || '').slice(0, 10);
+
+  if (report.loading) return <><button onClick={onBack} style={{ background: 'none', border: 'none', color: T.mute, padding: 0, marginBottom: 20, cursor: 'pointer' }}>← Back</button><h1 className="tight" style={{ fontSize: 24, fontWeight: 600 }}>Employee Dashboard</h1><div style={{ height: 32 }} /><Rows n={6} /></>;
+  if (report.error) return <><button onClick={onBack} style={{ background: 'none', border: 'none', color: T.mute, padding: 0, marginBottom: 20, cursor: 'pointer' }}>← Back</button><ErrorBlock error={report.error} onRetry={report.reload} /></>;
+
+  const { employee, summary, attendance, schoolVisits, tasks, claims, latAttempts } = report.data;
+  const attMap = new Map(attendance.map((a) => [dayKey(a.work_date), a]));
+  const visitsByDay = new Map();
+  schoolVisits.forEach((v) => { const k = dayKey(v.work_date); visitsByDay.set(k, [...(visitsByDay.get(k) || []), v]); });
+  const claimsByDay = new Map();
+  claims.forEach((c) => { const k = dayKey(c.claim_date); claimsByDay.set(k, [...(claimsByDay.get(k) || []), c]); });
+  const taskByDay = new Map();
+  tasks.forEach((t) => { const k = dayKey(t.due_date); taskByDay.set(k, [...(taskByDay.get(k) || []), t]); });
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  const days = [];
+  for (let d = new Date(end); d >= start; d.setUTCDate(d.getUTCDate() - 1)) days.push(d.toISOString().slice(0, 10));
+
+  const card = (label, value, sub) => (
+    <div style={{ padding: 16, border: `1px solid ${T.line}`, borderRadius: 10, background: T.sub, minWidth: 0 }}>
+      <div className="mono" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.12em', color: T.faint, marginBottom: 8 }}>{label}</div>
+      <div className="tight" style={{ fontSize: isPhone ? 22 : 28, fontWeight: 600 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: T.mute, marginTop: 5 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <>
+      <button className="press" onClick={onBack} style={{ background: 'none', border: 'none', color: T.mute, padding: 0, marginBottom: 18, cursor: 'pointer', fontSize: 13 }}>← Back to dashboard</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap', marginBottom: 24 }}>
+        <div>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{employee.name}</h1>
+          <div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>{employee.role} · {employee.employee_code}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {['today', 'week', 'month'].map((k) => <button key={k} className="press" onClick={() => quick(k)} style={{ padding: '8px 11px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, fontSize: 12 }}>{k === 'today' ? 'Today' : k === 'week' ? 'This Week' : 'This Month'}</button>)}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr 1fr' : '1fr 1fr', gap: 10, marginBottom: 28 }}>
+        <Field label="From"><Input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></Field>
+        <Field label="To"><Input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} /></Field>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(4,1fr)', gap: 12, marginBottom: 12 }}>
+        {card('Attendance', `${summary.attendanceDays} days`, `${summary.completedDays} completed · ${summary.lateDays} late`)}
+        {card('Working Time', fmtHours(summary.totalHours), `${summary.fieldDays} field days`)}
+        {card('School Visits', summary.schoolVisits, fmtHours(summary.visitHours))}
+        {card('Tasks', `${summary.tasksCompleted}/${summary.tasksAssigned}`, `${summary.tasksOverdue} overdue · ${summary.tasksSubmitted} submitted`)}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr 1fr' : 'repeat(4,1fr)', gap: 12, marginBottom: 36 }}>
+        {card('Claims', fmtMoney(summary.claimsTotal), `${summary.claimCount} claims`)}
+        {card('Local', fmtMoney(summary.localTotal))}
+        {card('Outstation', fmtMoney(summary.outstationTotal))}
+        {card('LAT', summary.latCompleted ? `${summary.latScore}/${summary.latPossible}` : '—', `${summary.latCompleted}/${summary.latAttempts} completed`)}
+      </div>
+
+      <Eyebrow>Daily Summary</Eyebrow>
+      <div style={{ borderTop: `1px solid ${T.line}`, marginBottom: 36 }}>
+        {days.map((day) => {
+          const a = attMap.get(day);
+          const vs = visitsByDay.get(day) || [];
+          const cs = claimsByDay.get(day) || [];
+          const ts = taskByDay.get(day) || [];
+          const dayHours = a?.check_in_time && a?.check_out_time ? ((new Date(a.check_out_time) - new Date(a.check_in_time)) / 3600000) : 0;
+          const claimAmount = cs.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
+          return <div key={day} style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <div style={{ width: 70, fontSize: 13, fontWeight: 500 }}>{dateText(day)}</div>
+              <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: T.mute }}>
+                {a ? `${a.status || 'Present'} · ${timeText(a.check_in_time)}–${timeText(a.check_out_time)}` : 'No attendance'}
+              </div>
+              <M style={{ fontSize: 12 }}>{dayHours ? fmtHours(dayHours) : '—'}</M>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 7, marginLeft: 82, fontSize: 11, color: T.mute }}>
+              {vs.length > 0 && <span>{vs.length} school visit{vs.length > 1 ? 's' : ''}</span>}
+              {ts.length > 0 && <span>{ts.filter((t) => t.effective_status === 'Completed').length}/{ts.length} tasks done</span>}
+              {cs.length > 0 && <span>{cs.length} claim{cs.length > 1 ? 's' : ''} · {fmtMoney(claimAmount)}</span>}
+              {a?.check_in_site && <span>{a.check_in_site}</span>}
+            </div>
+          </div>;
+        })}
+      </div>
+
+      <Eyebrow>School Visits</Eyebrow>
+      {!schoolVisits.length ? <Blank title="No school visits in this period" /> : <div style={{ borderTop: `1px solid ${T.line}`, marginBottom: 36 }}>
+        {schoolVisits.map((v) => <div key={v.visit_id} style={{ padding: '13px 0', borderBottom: `1px solid ${T.line}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><span style={{ fontSize: 13, fontWeight: 500 }}>{v.school_name}</span><M style={{ fontSize: 11, color: T.faint }}>{dateText(v.work_date)}</M></div>
+          <M style={{ fontSize: 11, color: T.mute, display: 'block', marginTop: 5 }}>{timeText(v.check_in_time)} – {timeText(v.check_out_time)}</M>
+        </div>)}
+      </div>}
+
+      <Eyebrow>Claims</Eyebrow>
+      {!claims.length ? <Blank title="No claims in this period" /> : <div style={{ borderTop: `1px solid ${T.line}`, marginBottom: 36 }}>
+        {claims.map((c) => <div key={c.claim_id} style={{ padding: '12px 0', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 12 }}><div style={{ flex: 1 }}><div style={{ fontSize: 13 }}>{c.category} · {c.expense_type}</div><div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>{dateText(c.claim_date)}{c.place ? ` · ${c.place}` : ''}</div></div><M style={{ fontSize: 13 }}>{fmtMoney(c.amount_paise)}</M></div>)}
+      </div>}
     </>
   );
 }
@@ -1246,7 +1373,7 @@ function AAttendance({ isPhone }) {
                     <div style={{ fontSize: 14, fontWeight: 500 }}>{r.employee_name}</div>
                     <div style={{ fontSize: 12, color: T.mute, marginTop: 3 }}>
                       {r.check_in_time
-                        ? `${r.location_type === 'SCHOOL' ? 'School' : 'Office'} · ${r.site_name || '—'}${r.site_zone ? ` · ${r.site_zone}` : ''}`
+                        ? `${r.location_type === 'SCHOOL' ? 'School' : r.location_type === 'OFFICE' ? 'Office' : (r.role === 'Trainer' || r.role === 'Technical Support') ? 'Field' : '—'} · ${r.site_name || ((r.role === 'Trainer' || r.role === 'Technical Support') ? 'Any location' : '—')}${r.site_zone ? ` · ${r.site_zone}` : ''}`
                         : r.role}
                     </div>
                   </div>
@@ -1360,8 +1487,17 @@ function AClaims({ isPhone }) {
 
   const cycleLabel = (start, end) => {
     if (!start) return 'Weekly Claims';
-    const s = new Date(`${start}T00:00:00Z`);
-    const e = new Date(`${end || start}T00:00:00Z`);
+    const toDateOnly = (value) => {
+      const raw = String(value || '').slice(0, 10);
+      const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return null;
+      const [, y, m, d] = match;
+      const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+      return Number.isNaN(date.getTime()) ? null : date;
+    };
+    const s = toDateOnly(start);
+    const e = toDateOnly(end || start);
+    if (!s || !e) return 'Weekly Claims';
     const opts = { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' };
     return `${s.toLocaleDateString('en-IN', opts)}–${e.toLocaleDateString('en-IN', opts)}`;
   };
@@ -1784,7 +1920,7 @@ function EditEmployee({ employee, onClose, onDone, isPhone }) {
           <button className="press" onClick={onClose} style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
         </div>
         <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Name</div><input value={f.name} onChange={e => set({name:e.target.value})} style={field} /></div>
-        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Role</div><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{['Trainer','Admin','Accountant','Content Writer','Designer','CEO'].map(r => <button key={r} className="press" onClick={() => set({role:r})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.role===r?T.text:'transparent',color:f.role===r?T.bg:T.mute,border:`1px solid ${f.role===r?T.text:T.line}`}}>{r}</button>)}</div></div>
+        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Role</div><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{['Trainer','Technical Support','Admin','Accountant','Content Writer','Designer','CEO'].map(r => <button key={r} className="press" onClick={() => set({role:r})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.role===r?T.text:'transparent',color:f.role===r?T.bg:T.mute,border:`1px solid ${f.role===r?T.text:T.line}`}}>{r}</button>)}</div></div>
         <div style={{ display:'grid', gridTemplateColumns:isPhone?'1fr':'1fr 1fr', gap:16, marginBottom:18 }}>
           <div><div className="mono" style={label}>Email</div><input type="email" value={f.email} onChange={e => set({email:e.target.value})} style={field} /></div>
           <div><div className="mono" style={label}>Phone</div><input value={f.phone} onChange={e => set({phone:e.target.value})} style={field} /></div>
@@ -1891,7 +2027,7 @@ function AddEmployee({ onClose, onDone, isPhone }) {
             <div style={{ marginBottom: 20 }}>
               <div className="mono" style={label}>Role</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {['Trainer', 'Admin', 'Accountant', 'Content Writer', 'Designer'].map((r) => {
+                {['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer'].map((r) => {
                   const on = f.role === r;
                   return (
                     <button key={r} className="press" onClick={() => set({ role: r })} style={{
@@ -1903,7 +2039,7 @@ function AddEmployee({ onClose, onDone, isPhone }) {
                 })}
               </div>
               <div style={{ fontSize: 12, color: T.faint, marginTop: 8 }}>
-                Trainers check in at a school; everyone else at the office.
+                Trainers and Technical Support can punch in/out from any location. Trainers also record school visit check-in/out at assigned schools.
               </div>
             </div>
 
