@@ -481,96 +481,142 @@ const splitContact = (value) => {
   return { name, phone: phone.trim() };
 };
 
-// Excel import deliberately uses a row/column map instead of positional
-// "next cell" logic. This is important because the supplied School History
-// sheet contains merged cells. A merged range must never cause the value from
-// the next row to be attached to the previous label.
+// The School History workbook is a form, not a database export. In real files
+// users may insert rows, move columns, or have merged cells. Therefore the
+// importer is label/header driven: it finds the row containing a field name,
+// then reads the value under the matching header. It does NOT rely on a fixed
+// "B19 means Teachers Copy" assumption. This prevents values such as STATUS or
+// another row's date from being attached to the preceding field.
 function importSchoolHistoryTemplate(cells, current) {
   const out = JSON.parse(JSON.stringify(current || {}));
+  const entries = Object.entries(cells).map(([ref, value]) => {
+    const m = ref.match(/^([A-Z]+)(\d+)$/); if (!m) return null;
+    let col = 0; for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
+    return { ref, row: Number(m[2]), col, value: normExcel(value) };
+  }).filter(Boolean);
+  const byRef = new Map(entries.map(x => [x.ref, x]));
+  const rows = new Map();
+  for (const x of entries) { if (!rows.has(x.row)) rows.set(x.row, []); rows.get(x.row).push(x); }
+  for (const r of rows.values()) r.sort((a,b)=>a.col-b.col);
+
+  const cleanLabel = (v) => normExcel(v).replace(/[:：]$/,'').replace(/\s+/g,' ').toLowerCase();
+  const escapeRe = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isFieldCell = (value, label) => {
+    const raw = normExcel(value);
+    return cleanLabel(raw) === cleanLabel(label) || new RegExp(`^${escapeRe(label)}\\s*[:：]`, 'i').test(raw);
+  };
+  const ownFieldValue = (cell, label) => {
+    if (!cell) return '';
+    const raw = normExcel(cell.value);
+    if (cleanLabel(raw) === cleanLabel(label)) return '';
+    return raw.replace(new RegExp(`^${escapeRe(label)}\\s*[:：]\\s*`, 'i'), '').trim();
+  };
+  const findLabel = (label, preferredRows=[]) => {
+    for (const row of preferredRows) {
+      const hit = (rows.get(row) || []).find(x => isFieldCell(x.value, label));
+      if (hit) return hit;
+    }
+    for (const x of entries) if (isFieldCell(x.value, label)) return x;
+    return null;
+  };
+  const valueAt = (row, col, date=false) => {
+    const x = [...(rows.get(row)||[])].find(e => e.col === col);
+    const v = x?.value || '';
+    return date ? excelDateText(v) : v;
+  };
+  const findHeaderCol = (headerRow, labels) => {
+    const wanted = labels.map(cleanLabel);
+    const hit = (rows.get(headerRow)||[]).find(x => wanted.includes(cleanLabel(x.value)));
+    return hit?.col ?? null;
+  };
+  const findHeaderRow = (labels, fallback) => {
+    const wanted = labels.map(cleanLabel);
+    const exact = (rows.get(fallback) || []).some(x => wanted.includes(cleanLabel(x.value)));
+    if (exact) return fallback;
+    for (const [r, cellsInRow] of rows) {
+      if (r >= fallback && cellsInRow.some(x => wanted.includes(cleanLabel(x.value)))) return r;
+    }
+    return fallback;
+  };
+  const findRowLabel = (label, fallback) => findLabel(label, fallback ? [fallback] : [])?.row ?? fallback;
+  const rowValue = (row, col, date=false, label='') => {
+    if (!row) return '';
+    const direct = col ? valueAt(row, col, date) : '';
+    if (direct) return direct;
+    if (label) {
+      const hit = findLabel(label, [row]);
+      const own = ownFieldValue(hit, label);
+      if (own) return date ? excelDateText(own) : own;
+    }
+    return '';
+  };
+  const firstNonLabelRight = (labelCell, blocked=[]) => {
+    if (!labelCell) return '';
+    const blockedSet = new Set(blocked.map(cleanLabel));
+    return (rows.get(labelCell.row)||[])
+      .filter(x=>x.col>labelCell.col && x.value && !blockedSet.has(cleanLabel(x.value)))
+      .sort((a,b)=>a.col-b.col)[0]?.value || '';
+  };
   const set = (path, value) => {
     const v = normExcel(value);
     if (v && v !== '-' && v !== '—') Object.assign(out, setPath(out, path, v));
   };
-  const read = (ref, date = false) => {
-    const v = excelText(cells, ref);
-    return date ? excelDateText(v) : v;
-  };
-  const firstValue = (...refs) => refs.map(read).map(normExcel).find(Boolean) || '';
-  const clean = (value, label) => labelValue(value, label);
 
-  // Header: A2:F2 is merged. A3:F3 contains label/value pairs.
-  const schoolName = clean(firstValue('A2','B2','C2','D2','E2','F2'), 'School Name');
-  set('location', clean(firstValue('B3','A3'), 'LOCATION'));
-  set('vintage', clean(firstValue('C3','D3'), 'VINTAGE'));
-  set('books', clean(firstValue('D3','E3'), 'BOOKS'));
-  set('category', clean(firstValue('E3','F3'), 'CATEGORY'));
+  // Basic details: locate the label/value pairs by their labels. The common
+  // template also stores them in B/C/D/E, so this works for both layouts.
+  const basic = [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']];
+  for (const [label,key] of basic) {
+    const hit = findLabel(label, [3]);
+    let value = '';
+    if (hit) {
+      value = ownFieldValue(hit, label);
+      if (!value) value = firstNonLabelRight(hit, ['LOCATION','VINTAGE','BOOKS','CATEGORY']);
+      if (!value) value = valueAt(hit.row, hit.col + 1);
+    }
+    set(key, labelValue(value, label));
+  }
+  const schoolHit = findLabel('SCHOOL NAME', [2]);
+  const schoolName = schoolHit ? (ownFieldValue(schoolHit, 'SCHOOL NAME') || firstNonLabelRight(schoolHit, ['SCHOOL NAME']) || valueAt(schoolHit.row, schoolHit.col+1)) : '';
 
-  // Contacts: D6:F8 is one merged block per row in the template.
-  for (const [row, key, phoneKey] of [
-    [6,'correspondent','correspondentPhone'],
-    [7,'principal','principalPhone'],
-    [8,'keyPerson','keyPersonPhone'],
-  ]) {
-    const raw = firstValue(`D${row}`, `E${row}`, `F${row}`, `B${row}`, `C${row}`);
-    const c = splitContact(raw);
-    set(`contacts.${key}`, c.name);
-    set(`contacts.${phoneKey}`, c.phone);
+  // Contacts: find each role label and take the first value to its right.
+  for (const [label,key,phoneKey] of [['CORRESPONDENT','correspondent','correspondentPhone'],['PRINCIPAL','principal','principalPhone'],['KEY PERSON','keyPerson','keyPersonPhone']]) {
+    const hit=findLabel(label);
+    const raw=ownFieldValue(hit, label) || firstNonLabelRight(hit, ['CORRESPONDENT','PRINCIPAL','KEY PERSON']) || '';
+    const c=splitContact(raw); set(`contacts.${key}`,c.name); set(`contacts.${phoneKey}`,c.phone);
   }
 
-  // Books & Payment. The four columns are meaningful and must stay separate:
-  // B=initial count, C=additional orders, D=returns, E=remarks.
-  const rows = [
-    [11,'lkg'], [12,'ukg'], [13,'discount'],
-  ];
-  for (const [row, key] of rows) {
-    set(`booksPayment.${key}`, read(`B${row}`));
-    set(`booksPayment.${key}AdditionalOrders`, read(`C${row}`));
-    set(`booksPayment.${key}Returns`, read(`D${row}`));
-    set(`booksPayment.${key}Remarks`, read(`E${row}`));
+  // Books & Payment: resolve the actual header columns first.
+  const bpHeader=findHeaderRow(['INITIAL COUNT','ADDITIONAL ORDERS','RETURNS','REMARKS'],10);
+  const bpCols={initial:findHeaderCol(bpHeader,['INITIAL COUNT']), additional:findHeaderCol(bpHeader,['ADDITIONAL ORDERS']), returns:findHeaderCol(bpHeader,['RETURNS']), remarks:findHeaderCol(bpHeader,['REMARKS'])};
+  for (const [label,key] of [['LKG','lkg'],['UKG','ukg'],['DISCOUNT','discount']]) {
+    const r=findRowLabel(label); set(`booksPayment.${key}`,rowValue(r,bpCols.initial)); set(`booksPayment.${key}AdditionalOrders`,rowValue(r,bpCols.additional)); set(`booksPayment.${key}Returns`,rowValue(r,bpCols.returns)); set(`booksPayment.${key}Remarks`,rowValue(r,bpCols.remarks));
   }
-  set('booksPayment.spInvoiceValue2526', read('B14'));
-  set('booksPayment.spInvoiceValueAdditionalOrders', read('C14'));
-  set('booksPayment.amountReceived', read('B15'));
-  set('booksPayment.amountReceivedDate', read('C15', true));
-  set('booksPayment.amountPending', read('B16'));
-  set('booksPayment.status', read('C16'));
-  set('booksPayment.remarks', read('E14') || read('E16'));
+  const inv=findLabel('SP INVOICE VALUE (25-26)'); if(inv) set('booksPayment.spInvoiceValue2526', ownFieldValue(inv,'SP INVOICE VALUE (25-26)') || firstNonLabelRight(inv,['SP INVOICE VALUE (25-26)','SP INVOICE VALUE (AO)']));
+  const ao=findLabel('SP INVOICE VALUE (AO)'); if(ao) set('booksPayment.spInvoiceValueAdditionalOrders', ownFieldValue(ao,'SP INVOICE VALUE (AO)') || firstNonLabelRight(ao,['SP INVOICE VALUE (25-26)','SP INVOICE VALUE (AO)']));
+  const received=findLabel('AMOUNT RECEIVED'); if(received) set('booksPayment.amountReceived', ownFieldValue(received,'AMOUNT RECEIVED') || firstNonLabelRight(received,['AMOUNT RECEIVED','DATE']));
+  const recvDateLabel=findLabel('DATE'); if(recvDateLabel && recvDateLabel.row===received?.row) set('booksPayment.amountReceivedDate', excelDateText(ownFieldValue(recvDateLabel,'DATE') || firstNonLabelRight(recvDateLabel,['DATE'])));
+  const pending=findLabel('AMOUNT PENDING'); if(pending) set('booksPayment.amountPending', ownFieldValue(pending,'AMOUNT PENDING') || firstNonLabelRight(pending,['AMOUNT PENDING','STATUS']));
+  const status=findLabel('STATUS'); if(status) set('booksPayment.status', ownFieldValue(status,'STATUS') || firstNonLabelRight(status,['STATUS']));
 
-  // Deliverables 1: B=count and C=date. Never concatenate the two cells.
-  for (const [row,key] of [[19,'teachersCopy'],[20,'teachersManual1'],[21,'teachersManual2'],[22,'flashCards']]) {
-    set(`deliverables1.${key}`, read(`B${row}`));
-    set(`deliverables1.${key}Date`, read(`C${row}`, true));
-  }
+  // Deliverables 1/3: use the COUNT and DATE header columns, not fixed B/C.
+  const d1=findHeaderRow(['COUNT','DATE'],18); const countCol=findHeaderCol(d1,['COUNT']); const dateCol=findHeaderCol(d1,['DATE']);
+  for (const [label,key] of [['TEACHERS COPY','teachersCopy'],['TEACHERS MANUAL 1','teachersManual1'],['TEACHERS MANUAL 2','teachersManual2'],['FLASH CARDS','flashCards']]) { const r=findRowLabel(label); set(`deliverables1.${key}`,rowValue(r,countCol,false,label)); set(`deliverables1.${key}Date`,rowValue(r,dateCol,true)); }
 
-  // Deliverables 2: WhatsApp uses B=count/C=date. Apps use the explicit header
-  // columns in row 25 and rows 26/27 for Windows/Kids.
-  set('deliverables2.whatsapp', read('B24'));
-  set('deliverables2.whatsappDate', read('C24', true));
-  for (const [row,key] of [[26,'windowsApp'],[27,'kidsApp']]) {
-    set(`deliverables2.${key}.appVersion`, read(`B${row}`));
-    set(`deliverables2.${key}.date`, read(`C${row}`, true));
-    set(`deliverables2.${key}.lkg`, read(`D${row}`));
-    set(`deliverables2.${key}.ukg`, read(`E${row}`));
-    set(`deliverables2.${key}.systemTvBoth`, read(`F${row}`));
-  }
-  set('deliverables2.appComments', read('B28'));
+  const d2=findHeaderRow(['COUNT','DATE'],23); const d2Count=findHeaderCol(d2,['COUNT']); const d2Date=findHeaderCol(d2,['DATE']);
+  const wa=findRowLabel('WHATSAPP'); set('deliverables2.whatsapp',rowValue(wa,d2Count,false,'WHATSAPP')); set('deliverables2.whatsappDate',rowValue(wa,d2Date,true));
+  const appHeader=findHeaderRow(['APP VERSION','DATE','LKG','UKG','SYSTEM / TV / BOTH'],25); const appCols={version:findHeaderCol(appHeader,['APP VERSION']),date:findHeaderCol(appHeader,['DATE']),lkg:findHeaderCol(appHeader,['LKG']),ukg:findHeaderCol(appHeader,['UKG']),system:findHeaderCol(appHeader,['SYSTEM / TV / BOTH'])};
+  for (const [label,key] of [['WINDOWS APP','windowsApp'],['KIDS APP','kidsApp']]) { const r=findRowLabel(label); set(`deliverables2.${key}.appVersion`,rowValue(r,appCols.version)); set(`deliverables2.${key}.date`,rowValue(r,appCols.date,true)); set(`deliverables2.${key}.lkg`,rowValue(r,appCols.lkg)); set(`deliverables2.${key}.ukg`,rowValue(r,appCols.ukg)); set(`deliverables2.${key}.systemTvBoth`,rowValue(r,appCols.system)); }
+  const appComments=findLabel('WINDOWS APP/KIDS APP COMMENTS'); if(appComments) set('deliverables2.appComments',firstNonLabelRight(appComments,['WINDOWS APP/KIDS APP COMMENTS']));
 
-  // Deliverables 3: B=count, C=date. D:F are merged comments in the supplied sheet.
-  for (const [row,key] of [[30,'questionPaper'],[31,'progressCard']]) {
-    set(`deliverables3.${key}`, read(`B${row}`));
-    set(`deliverables3.${key}Date`, read(`C${row}`, true));
-  }
+  const d3=findHeaderRow(['COUNT','DATE'],29); const d3Count=findHeaderCol(d3,['COUNT']); const d3Date=findHeaderCol(d3,['DATE']);
+  for (const [label,key] of [['QUESTION PAPER','questionPaper'],['PROGRESS CARD','progressCard']]) { const r=findRowLabel(label); set(`deliverables3.${key}`,rowValue(r,d3Count,false,label)); set(`deliverables3.${key}Date`,rowValue(r,d3Date,true)); }
 
-  // Services: B is the date column in the template; comment rows are merged B:F.
-  const serviceRows = [
-    [33,'t1',true], [38,'t2',true], [39,'generalVisit',true], [40,'atu2',true],
-    [41,'atu2Comments',false], [42,'sim2',true], [43,'sim2Comments',false],
-    [44,'t3',true], [45,'sim3',true], [46,'sim3Comments',false],
-  ];
-  for (const [row,key,isDate] of serviceRows) set(`services.${key}`, read(`B${row}`, isDate));
-  set('currentStatus', read('B47'));
-  set('comments', read('B48'));
-  return { out, schoolName };
+  // Services: DATE is the column immediately under the SERVICES header.
+  const svcHeader=findHeaderRow(['SERVICES'],32); const svcDateCol=findHeaderCol(svcHeader,['DATE']) || 2;
+  for (const [label,key] of [['T1','t1'],['T2','t2'],['GENERAL VISIT','generalVisit'],['ATU 2','atu2'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2','sim2'],['SIM 2 COMMENTS','sim2Comments'],['T3','t3'],['SIM 3','sim3'],['SIM 3 COMMENTS','sim3Comments']]) { const r=findRowLabel(label); set(`services.${key}`,ownFieldValue(findLabel(label,[r]),label) || rowValue(r,svcDateCol,key.toLowerCase().includes('comments')===false)); }
+  const cs=findLabel('CURRENT STATUS'); if(cs) set('currentStatus',ownFieldValue(cs,'CURRENT STATUS') || firstNonLabelRight(cs,['CURRENT STATUS']));
+  const comments=findLabel('COMMENTS'); if(comments) set('comments',ownFieldValue(comments,'COMMENTS') || firstNonLabelRight(comments,['COMMENTS']));
+  return {out, schoolName};
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [contactChoice,setContactChoice]=useState('');
