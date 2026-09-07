@@ -7,7 +7,7 @@ import {
 } from './core.js';
 import { login, revoke, authenticate, adminOnly, hashPassword, assertPasswordPolicy,
   requestPasswordReset, completePasswordReset } from './auth.js';
-import { putObject, getObject, sniff, safeName, storageKey, sha256, signDownload, verifyDownload } from './storage.js';
+import { putObject, getObject, deleteObject, sniff, safeName, storageKey, sha256, signDownload, verifyDownload } from './storage.js';
 import { lat } from './lat.js';
 import { idempotent, notify, notifyAdmins, notifyEveryone } from './reliability.js';
 
@@ -71,6 +71,19 @@ const employeeSchema = z.object({
   capFood: z.number().int().min(0).max(100000).default(500),
   capStay: z.number().int().min(0).max(100000).default(1500),
 }).strict();
+
+const employeeUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  role: z.enum(['Trainer', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
+  email: z.string().email().max(160),
+  phone: z.string().trim().max(30).optional().nullable(),
+  status: z.enum(['Active', 'Inactive']).default('Active'),
+  claimsEnabled: z.boolean().default(false),
+  capFood: z.number().int().min(0).max(100000).default(500),
+  capStay: z.number().int().min(0).max(100000).default(1500),
+  password: z.string().optional(),
+}).strict();
+
 
 const page = (q) => ({
   limit: Math.min(Math.max(Number(q.limit) || 50, 1), 200),
@@ -1141,6 +1154,42 @@ ${excelSheet('Outstation Expenses', outRows)}
 
 /* ────────────────────────────────────────────────────────────── files */
 
+router.post('/admin/claims/cycles/:cycle/clear', adminOnly, wrap(async (req, res) => {
+  if (req.body?.confirm !== 'CLEAR') {
+    throw unprocessable('Type CLEAR to confirm deletion of this exported week.', 'confirmation_required');
+  }
+
+  const cycle = /^\d{4}-\d{2}-\d{2}$/.test(req.params.cycle) ? req.params.cycle : null;
+  if (!cycle) throw unprocessable('Use a valid Saturday cycle date.', 'invalid_cycle');
+
+  const keys = await tx(req.user, async (c) => {
+    const cur = (await c.query(
+      `SELECT status FROM claim_cycles WHERE cycle_start=$1 FOR UPDATE`, [cycle])).rows[0];
+    if (!cur) throw notFound('That claim cycle does not exist.');
+    if (cur.status !== 'Closed') throw conflict('Only a closed cycle can be cleared after export.', 'claim_cycle_not_closed');
+
+    const attachments = (await c.query(
+      `SELECT a.storage_key FROM attachments a
+         JOIN claims cl ON cl.claim_id=a.claim_id
+        WHERE cl.claim_cycle_start=$1`, [cycle])).rows;
+
+    await c.query(`DELETE FROM attachments WHERE claim_id IN (SELECT claim_id FROM claims WHERE claim_cycle_start=$1)`, [cycle]);
+    const deletedClaims = (await c.query(`DELETE FROM claims WHERE claim_cycle_start=$1`, [cycle])).rowCount;
+    await c.query(`DELETE FROM claim_cycles WHERE cycle_start=$1`, [cycle]);
+    return { keys: attachments.map((r) => r.storage_key), deletedClaims };
+  });
+
+  let deletedFiles = 0;
+  const failedFiles = [];
+  for (const key of keys.keys) {
+    try { await deleteObject(key); deletedFiles += 1; }
+    catch (e) { failedFiles.push(key); logger.error({ err: e, storageKey: key, reqId: req.id }, 'claim file cleanup failed'); }
+  }
+
+  res.json({ cycle, deletedClaims: keys.deletedClaims, deletedFiles, failedFiles });
+}));
+
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: config.maxUploadBytes, files: 1 },
@@ -1209,6 +1258,19 @@ router.get('/admin/dashboard', adminOnly, wrap(async (req, res) => {
   res.json({ businessDate: (await pool.query('SELECT ist_today() AS d')).rows[0].d, work: work.rows[0], board: board.rows });
 }));
 
+
+router.post('/admin/test/reset', adminOnly, wrap(async (req, res) => {
+  if (process.env.ALLOW_TEST_RESET !== 'true') {
+    throw forbidden('Test reset is disabled. Set ALLOW_TEST_RESET=true only on the testing environment.', 'test_reset_disabled');
+  }
+  if (req.body?.confirm !== 'RESET ALL TEST DATA') {
+    throw unprocessable('Type RESET ALL TEST DATA to confirm.', 'confirmation_required');
+  }
+
+  const result = (await pool.query(`SELECT reset_test_data() AS result`)).rows[0].result;
+  res.json(result);
+}));
+
 router.post('/admin/employees', adminOnly, wrap(async (req, res) => {
   const f = parse(employeeSchema, req.body);
   assertPasswordPolicy(f.password);
@@ -1239,6 +1301,35 @@ router.get('/admin/employees', adminOnly, wrap(async (req, res) => {
             cap_food, cap_stay FROM employees ORDER BY employee_code`);
   res.json(rows);
 }));
+
+router.patch('/admin/employees/:id', adminOnly, uuidParam('id'), wrap(async (req, res) => {
+  const f = parse(employeeUpdateSchema, req.body);
+  const hash = f.password?.trim() ? await (assertPasswordPolicy(f.password), hashPassword(f.password)) : null;
+  const out = await tx(req.user, async (c) => {
+    const existing = (await c.query(
+      `SELECT employee_id, email, is_admin FROM employees WHERE employee_id=$1 FOR UPDATE`, [req.params.id])).rows[0];
+    if (!existing) throw notFound('That employee does not exist.');
+
+    if (String(existing.email).toLowerCase() !== f.email.toLowerCase()) {
+      const duplicate = await c.query(`SELECT 1 FROM employees WHERE email=$1 AND employee_id<>$2`, [f.email, req.params.id]);
+      if (duplicate.rowCount) throw conflict('An account with that email already exists.', 'email_taken');
+    }
+
+    const row = (await c.query(
+      `UPDATE employees
+          SET name=$2, role=$3, email=$4, phone=$5, status=$6,
+              claims_enabled=$7, cap_food=$8, cap_stay=$9,
+              password_hash=COALESCE($10, password_hash),
+              password_changed_at=CASE WHEN $10 IS NULL THEN password_changed_at ELSE now() END
+        WHERE employee_id=$1
+        RETURNING employee_id, employee_code, name, role, email, phone, is_admin, status, claims_enabled, cap_food, cap_stay`,
+      [req.params.id, f.name, f.role, f.email.toLowerCase(), f.phone || null, f.status,
+       f.claimsEnabled, f.capFood, f.capStay, hash])).rows[0];
+    return row;
+  });
+  res.json(out);
+}));
+
 
 router.get('/admin/audit', adminOnly, wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
