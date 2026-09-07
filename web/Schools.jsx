@@ -237,7 +237,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
         </div>
       )}
 
-      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} M={M} Btn={Btn} />
+      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} M={M} Btn={Btn} onSaved={() => detail.reload()} />
 
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
@@ -368,8 +368,8 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 
 
 const historySections = [
-  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
-  ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.principal','Principal'], ['contacts.keyPerson','Key Person']]],
+  ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
   ['Books & Payment', [['booksPayment.lkg','LKG'], ['booksPayment.ukg','UKG'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValue2526','SP Invoice Value (25-26)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (Additional Orders)'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']]],
   ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy'], ['deliverables1.teachersManual1','Teachers Manual 1'], ['deliverables1.teachersManual2','Teachers Manual 2'], ['deliverables1.flashCards','Flash Cards']]],
   ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App / Kids App Comments']]],
@@ -380,30 +380,128 @@ const historySections = [
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
 function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
 
-function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn }) {
-  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null);
+function readU16(view, offset) { return view.getUint16(offset, true); }
+function readU32(view, offset) { return view.getUint32(offset, true); }
+
+async function unzipEntry(buffer, entry) {
+  const view = new DataView(buffer);
+  const local = entry.localOffset;
+  if (readU32(view, local) !== 0x04034b50) throw new Error('Invalid Excel file.');
+  const nameLen = readU16(view, local + 26), extraLen = readU16(view, local + 28);
+  const start = local + 30 + nameLen + extraLen;
+  const compressed = buffer.slice(start, start + entry.compressedSize);
+  if (entry.method === 0) return new Uint8Array(compressed);
+  if (entry.method !== 8 || typeof DecompressionStream === 'undefined') throw new Error('This browser cannot read this Excel file.');
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([compressed]).stream().pipeThrough(ds);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readXlsxFiles(file) {
+  if (!/\.xlsx$/i.test(file.name)) throw new Error('Please choose an .xlsx Excel file.');
+  const buffer = await file.arrayBuffer();
+  const view = new DataView(buffer);
+  let eocd = -1;
+  for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 65557); i--) {
+    if (readU32(view, i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('The Excel file could not be read.');
+  const count = readU16(view, eocd + 10), cdSize = readU32(view, eocd + 12), cdOffset = readU32(view, eocd + 16);
+  const entries = new Map(); let off = cdOffset;
+  const bytes = new Uint8Array(buffer);
+  const decoder = new TextDecoder();
+  for (let i = 0; i < count; i++) {
+    if (readU32(view, off) !== 0x02014b50) throw new Error('Invalid Excel archive.');
+    const method = readU16(view, off + 10), compressedSize = readU32(view, off + 20), nameLen = readU16(view, off + 28), extraLen = readU16(view, off + 30), commentLen = readU16(view, off + 32), localOffset = readU32(view, off + 42);
+    const name = decoder.decode(bytes.slice(off + 46, off + 46 + nameLen));
+    entries.set(name, { method, compressedSize, localOffset });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  const get = async (name) => {
+    const entry = entries.get(name); if (!entry) return null;
+    return new TextDecoder().decode(await unzipEntry(buffer, entry));
+  };
+  const sharedXml = await get('xl/sharedStrings.xml');
+  const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si => Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
+  const sheetXml = await get('xl/worksheets/sheet1.xml');
+  if (!sheetXml) throw new Error('The first worksheet could not be read.');
+  const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
+  const cells = {};
+  doc.querySelectorAll('sheetData > row > c').forEach(c => {
+    const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
+    let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
+    if (type === 's') value = shared[Number(value)] ?? '';
+    cells[ref] = String(value).trim();
+  });
+  return { cells, sheetName: 'Sheet1' };
+}
+
+const excelText = (cells, ref) => String(cells[ref] ?? '').trim();
+const labelValue = (value, label) => String(value || '').replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
+const excelDateText = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const serial = Number(raw);
+    if (serial > 20000 && serial < 80000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      return `${String(d.getUTCDate()).padStart(2,'0')}/${String(d.getUTCMonth()+1).padStart(2,'0')}/${d.getUTCFullYear()}`;
+    }
+  }
+  return raw;
+};
+const splitContact = (value) => {
+  const phone = (String(value).match(/(?:\+?\d[\d\s().-]{7,}\d)/) || [])[0] || '';
+  const name = phone ? String(value).replace(phone, '').replace(/[|–—-]+\s*$/,'').trim() : String(value).trim();
+  return { name, phone: phone.trim() };
+};
+
+function importSchoolHistoryTemplate(cells, current) {
+  const out = JSON.parse(JSON.stringify(current || {}));
+  const set = (path, value) => { if (String(value).trim()) Object.assign(out, setPath(out, path, String(value).trim())); };
+  // The supplied Sapience 2025–2026 workbook is a labelled template. Values
+  // are read from the cells beside those labels; combined label:value cells are
+  // also supported for populated copies of the workbook.
+  set('location', excelText(cells,'B3'));
+  const vintageCell = excelText(cells,'C3');
+  const booksCell = excelText(cells,'D3');
+  const categoryCell = excelText(cells,'E3');
+  set('vintage', labelValue(vintageCell, 'VINTAGE') || (vintageCell ? vintageCell : ''));
+  set('books', labelValue(booksCell, 'BOOKS') || excelText(cells,'F3').replace(/^BOOKS\s*:\s*/i,''));
+  set('category', labelValue(categoryCell, 'CATEGORY') || excelText(cells,'F3').replace(/^CATEGORY\s*:\s*/i,''));
+  for (const [row, key, phoneKey] of [[6,'correspondent','correspondentPhone'],[7,'principal','principalPhone'],[8,'keyPerson','keyPersonPhone']]) {
+    const c = splitContact(excelText(cells,`D${row}`));
+    set(`contacts.${key}`, c.name); set(`contacts.${phoneKey}`, c.phone);
+  }
+  const map = {
+    B11:'booksPayment.lkg',B12:'booksPayment.ukg',B13:'booksPayment.discount',B14:'booksPayment.spInvoiceValue2526',D14:'booksPayment.spInvoiceValueAdditionalOrders',B15:'booksPayment.amountReceived',C15:'booksPayment.amountReceivedDate',B16:'booksPayment.amountPending',C16:'booksPayment.status',E16:'booksPayment.remarks',
+    B19:'deliverables1.teachersCopy',B20:'deliverables1.teachersManual1',B21:'deliverables1.teachersManual2',B22:'deliverables1.flashCards',
+    B24:'deliverables2.whatsapp',B26:'deliverables2.windowsApp.appVersion',C26:'deliverables2.windowsApp.date',D26:'deliverables2.windowsApp.lkg',E26:'deliverables2.windowsApp.ukg',F26:'deliverables2.windowsApp.systemTvBoth',B27:'deliverables2.kidsApp.appVersion',C27:'deliverables2.kidsApp.date',D27:'deliverables2.kidsApp.lkg',E27:'deliverables2.kidsApp.ukg',F27:'deliverables2.kidsApp.systemTvBoth',B28:'deliverables2.appComments',
+    B30:'deliverables3.questionPaper',B31:'deliverables3.progressCard',B33:'services.t1',B38:'services.t2',B39:'services.generalVisit',B40:'services.atu2',B41:'services.atu2Comments',B42:'services.sim2',B43:'services.sim2Comments',B44:'services.t3',B45:'services.sim3',B46:'services.sim3Comments',B47:'currentStatus',B48:'comments'
+  };
+  Object.entries(map).forEach(([ref,path])=>set(path, /\.date$/.test(path) || /Date$/.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref)));
+  return out;
+}
+
+function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
+  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [contactChoice,setContactChoice]=useState('');
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
   useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
-  const save=async()=>{setBusy(true);setProblem(null);try{await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);window.location.reload();}catch(e){setProblem(e);}finally{setBusy(false);}};
+  const save=async()=>{setBusy(true);setProblem(null);try{const out=await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);onSaved?.(out?.school_history || draft);}catch(e){setProblem(e);}finally{setBusy(false);}};
+  const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const excelSchool=excelText(cells,'A2');if(excelSchool && !/^school\s*name$/i.test(excelSchool) && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(importSchoolHistoryTemplate(cells,draft));}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
+  const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:40,padding:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-      <div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div>
-      <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>
-    </div>
-    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{
-      const vals=fields.map(([path,label])=>[label,String(getPath(initial,path)).trim()]).filter(([,v])=>v);
-      if(!vals.length)return null; return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}><div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>{vals.map(([label,value])=><div key={label} style={{display:'flex',gap:12,padding:'5px 0',fontSize:12}}><span style={{color:T.faint,minWidth:190}}>{label}</span><span style={{color:T.text,whiteSpace:'pre-wrap'}}>{value}</span></div>)}</div>;
-    })}
-    {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
-      <div className="rise" style={{width:'100%',maxWidth:680,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:20}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
-        {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn: /comments|remarks|appComments|Comments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label) ? <textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/> : <input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
-        {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}
-        <div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
-      </div>
-    </div>}
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div><button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button></div>
+    {contactItems.length>0 && <div style={{display:'flex',gap:8,marginBottom:14,alignItems:'center'}}><select aria-label="School contact" value={contactChoice} onChange={e=>setContactChoice(e.target.value)} style={{flex:1,minWidth:0,padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:T.bg,color:T.text,fontSize:13}}><option value="">Contacts</option>{contactItems.map((x,i)=><option key={i} value={i}>{x.label}{x.name?` · ${x.name}`:''}{x.phone?` · ${x.phone}`:''}</option>)}</select>{contactChoice!=='' && contactItems[Number(contactChoice)]?.phone && <a className="press" href={`tel:${contactItems[Number(contactChoice)].phone.replace(/[^+\d]/g,'')}`} style={{padding:'8px 11px',borderRadius:8,border:`1px solid ${T.line}`,color:T.text,textDecoration:'none',fontSize:12}}>Call</a>}</div>}
+    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{const vals=fields.map(([path,label])=>[label,String(getPath(initial,path)).trim()]).filter(([,v])=>v);if(!vals.length)return null;return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}><div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>{vals.map(([label,value])=><div key={label} style={{display:'flex',gap:12,padding:'5px 0',fontSize:12}}><span style={{color:T.faint,minWidth:190}}>{label}</span><span style={{color:T.text,whiteSpace:'pre-wrap'}}>{value}</span></div>)}</div>})}
+    {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2025–2026 School History format and fills the form. You can edit anything before saving.</span></div>
+      {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn:/comments|remarks|appComments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label)?<textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/>:<input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
+      {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}<div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
+    </div></div>}
   </div>;
 }
 

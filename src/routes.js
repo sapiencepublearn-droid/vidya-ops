@@ -603,13 +603,17 @@ router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
 }));
 
 const schoolHistorySchema = z.object({
+  location: z.string().trim().max(200).optional().nullable(),
   vintage: z.string().trim().max(120).optional().nullable(),
   books: z.string().trim().max(120).optional().nullable(),
   category: z.string().trim().max(120).optional().nullable(),
   contacts: z.object({
     correspondent: z.string().trim().max(160).optional().nullable(),
+    correspondentPhone: z.string().trim().max(40).optional().nullable(),
     principal: z.string().trim().max(160).optional().nullable(),
+    principalPhone: z.string().trim().max(40).optional().nullable(),
     keyPerson: z.string().trim().max(160).optional().nullable(),
+    keyPersonPhone: z.string().trim().max(40).optional().nullable(),
   }).default({}),
   booksPayment: z.object({
     lkg: z.string().trim().max(120).optional().nullable(),

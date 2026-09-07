@@ -374,7 +374,7 @@ function Login({ onIn, expired, theme, setTheme }) {
             </div>
           )}
 
-          <Btn type="submit" variant="solid" full busy={busy} onClick={submit}>
+          <Btn type="submit" variant="solid" full busy={busy}>
             {busy ? 'Signing in' : 'Sign in'}
           </Btn>
         </form>
