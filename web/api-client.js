@@ -58,7 +58,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     return data;
   }
 
-    async requestBlob(path, { method = 'GET', body, idempotencyKey } = {}) {
+    const requestBlob = async (path, { method = 'GET', body, idempotencyKey } = {}) => {
       const headers = {};
       if (token) headers.Authorization = `Bearer ${token}`;
       if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;

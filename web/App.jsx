@@ -793,7 +793,6 @@ function ClaimForm({ caps, onClose, onDone }) {
   const submit = async () => {
     setBusy(true); setProblem(null);
     try {
-      // Bill upload is optional. A claim can be submitted without a bill.
       const uploaded = file ? await api.uploadFile(file) : null;
       await api.createClaim({
         date: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
