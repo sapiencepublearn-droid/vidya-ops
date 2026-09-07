@@ -947,7 +947,7 @@ function Admin({ me, onOut, theme, setTheme }) {
   const isPhone = useIsPhone();
   const [page, setPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'LAT'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit']];
+  const nav = [['dashboard', 'Today'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['news', 'Notices'], ['words', 'LAT'], ['claims', 'Claims'], ['employees', 'Team'], ['audit', 'Audit'], ['tools', 'Tools']];
 
   const body = (
     <main key={page} className="rise" style={{
@@ -963,6 +963,7 @@ function Admin({ me, onOut, theme, setTheme }) {
       {page === 'claims' && <AClaims isPhone={isPhone} />}
       {page === 'employees' && <AEmployees isPhone={isPhone} />}
       {page === 'audit' && <AAudit />}
+      {page === 'tools' && <ATools isPhone={isPhone} />}
     </main>
   );
 
@@ -1285,6 +1286,7 @@ function AClaims({ isPhone }) {
   const [selectedEmployee, setSelectedEmployee] = useState(null);
   const [filter, setFilter] = useState('All');
   const [acting, setActing] = useState(null);
+  const [claimTab, setClaimTab] = useState('weekly');
   const cycleInfo = useResource(() => api.admin.claimCycles(), []);
 
   // Step 3 uses the weekly cycle data already returned by the Step 2
@@ -1400,6 +1402,73 @@ function AClaims({ isPhone }) {
     finally { setActing(null); }
   };
 
+  const exportAndClearCycle = async (cycle) => {
+    if (!cycle || acting) return;
+    setActing(`clear:${cycle}`);
+    try {
+      await api.admin.exportClaims(cycle);
+      const ok = window.confirm(`The Excel file for ${cycle} has been downloaded. Continue and permanently clear this exported week's claims and bill files?`);
+      if (!ok) return;
+      await api.admin.clearClaimCycle(cycle, newActionKey());
+      await Promise.all([claims.reload(), cycleInfo.reload()]);
+      if (selectedCycle === cycle) setSelectedCycle(null);
+      alert('The exported week and its stored bill files have been cleared.');
+    } catch (e) {
+      alert(e?.message || 'Could not export and clear the claim cycle.');
+    } finally { setActing(null); }
+  };
+
+  if (claimTab === 'clear') {
+    const closedCycles = (cycleInfo.data || []).filter((c) => c.status === 'Closed');
+    const cycleLabelFor = (c) => cycleLabel(c.cycle_start, c.cycle_end);
+    return (
+      <>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 28, borderBottom: `1px solid ${T.line}` }}>
+          {['weekly', 'clear'].map((tab) => (
+            <button key={tab} className="press" onClick={() => setClaimTab(tab)} style={{
+              background: 'none', border: 'none', padding: '0 0 12px', marginRight: 16,
+              color: claimTab === tab ? T.text : T.faint, cursor: 'pointer', fontSize: 13,
+              borderBottom: claimTab === tab ? `1.5px solid ${T.accent}` : '1.5px solid transparent',
+            }}>{tab === 'weekly' ? 'Weekly Claims' : 'Clear Exported Weeks'}</button>
+          ))}
+        </div>
+        <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 8px' }}>Clear exported weeks</h1>
+        <p style={{ fontSize: 13, color: T.mute, lineHeight: 1.6, margin: '0 0 28px', maxWidth: 680 }}>
+          Export a closed Saturday–Friday cycle first. The action below downloads the Excel file and then asks for confirmation before permanently deleting that week's claim rows and stored bill files.
+        </p>
+        {!closedCycles.length ? <Blank title="No closed weeks to clear" /> : (
+          <div style={{ borderTop: `1px solid ${T.line}` }}>
+            {closedCycles.map((c) => (
+              <div key={c.cycle_start} style={{ padding: '16px 0', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{cycleLabelFor(c)}</div>
+                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>{c.bill_count} bills · {rupees(c.total_paise)}</M>
+                </div>
+                <button className="press" disabled={!!acting} onClick={() => exportAndClearCycle(c.cycle_start)} style={{
+                  padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg,
+                  color: T.text, cursor: acting ? 'wait' : 'pointer',
+                }}>{acting === `clear:${c.cycle_start}` ? 'Exporting & clearing…' : 'Export & Clear'}</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Weekly claims tab
+  const claimTabs = (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 24, borderBottom: `1px solid ${T.line}` }}>
+      {['weekly', 'clear'].map((tab) => (
+        <button key={tab} className="press" onClick={() => { setClaimTab(tab); setSelectedEmployee(null); }} style={{
+          background: 'none', border: 'none', padding: '0 0 12px', marginRight: 16,
+          color: claimTab === tab ? T.text : T.faint, cursor: 'pointer', fontSize: 13,
+          borderBottom: claimTab === tab ? `1.5px solid ${T.accent}` : '1.5px solid transparent',
+        }}>{tab === 'weekly' ? 'Weekly Claims' : 'Clear Exported Weeks'}</button>
+      ))}
+    </div>
+  );
+
   if (selectedEmployee) {
     return (
       <>
@@ -1478,6 +1547,7 @@ function AClaims({ isPhone }) {
 
   return (
     <>
+      {claimTabs}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
         gap: 16, marginBottom: 24, flexWrap: 'wrap',
@@ -1591,11 +1661,43 @@ function AClaims({ isPhone }) {
   );
 }
 
+
+function ATools({ isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const reset = async () => {
+    if (busy) return;
+    if (!window.confirm('This will clear testing data, including claims, bill files, attendance, tasks, LAT attempts, notices and audit history. Employee accounts, schools and assignments are preserved. Continue?')) return;
+    if (!window.confirm('FINAL CONFIRMATION: permanently RESET ALL TEST DATA?')) return;
+    setBusy(true); setProblem(null);
+    try {
+      await api.admin.testReset(newActionKey());
+      alert('Testing data has been cleared. Employee accounts and school configuration were preserved.');
+    } catch (e) { setProblem(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <>
+      <h1 className="tight" style={{fontSize:24,fontWeight:600,margin:'0 0 8px'}}>Admin Tools</h1>
+      <p style={{fontSize:13,color:T.mute,lineHeight:1.6,margin:'0 0 28px',maxWidth:700}}>Use these tools only while testing. The reset is intentionally disabled unless the server has <M>ALLOW_TEST_RESET=true</M>. Remove that environment variable before production.</p>
+      <div style={{border:`1px solid ${T.line}`,borderRadius:12,padding:20,background:T.sub,maxWidth:700}}>
+        <div style={{fontSize:15,fontWeight:600,marginBottom:8}}>Reset testing data</div>
+        <div style={{fontSize:13,color:T.mute,lineHeight:1.6,marginBottom:18}}>Clears operational test records and uploaded files, including claims, attendance, tasks, LAT data, notices and audit history. Employee accounts, school/location master data and trainer assignments remain.</div>
+        {problem && <div style={{fontSize:13,color:T.accent,marginBottom:16}}>{problem.message}</div>}
+        <button className="press" disabled={busy} onClick={reset} style={{padding:'10px 14px',borderRadius:8,border:`1px solid ${T.accent}`,background:'transparent',color:T.accent,cursor:busy?'wait':'pointer'}}>{busy?'Resetting…':'Reset All Test Data'}</button>
+      </div>
+    </>
+  );
+}
+
 function AEmployees({ isPhone }) {
   const T = useT();
   const api = useApi();
   const staff = useResource(() => api.admin.employees(), []);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   return (
     <>
@@ -1610,6 +1712,7 @@ function AEmployees({ isPhone }) {
             {staff.data.map((e) => (
               <div key={e.employee_id} className="row" style={{ padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <button className="press" onClick={() => setEditing(e)} style={{ padding: '7px 10px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, cursor: 'pointer' }}>Edit</button>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 500 }}>{e.name}</div>
                     <M style={{ fontSize: 11, color: T.faint, wordBreak: 'break-all' }}>{e.employee_code} · {e.email}</M>
@@ -1630,6 +1733,10 @@ function AEmployees({ isPhone }) {
         <AddEmployee isPhone={isPhone} onClose={() => setAdding(false)}
           onDone={() => { setAdding(false); staff.reload(); }} />
       )}
+      {editing && (
+        <EditEmployee employee={editing} isPhone={isPhone} onClose={() => setEditing(null)}
+          onDone={() => { setEditing(null); staff.reload(); }} />
+      )}
     </>
   );
 }
@@ -1640,6 +1747,61 @@ function AEmployees({ isPhone }) {
  * no invite email in this system and adding a mail service is not
  * warranted for a team of this size.
  */
+
+function EditEmployee({ employee, onClose, onDone, isPhone }) {
+  const T = useT();
+  const api = useApi();
+  const [f, setF] = useState({
+    name: employee.name || '', role: employee.role || 'Trainer', email: employee.email || '',
+    phone: employee.phone || '', status: employee.status || 'Active',
+    claimsEnabled: !!employee.claims_enabled, capFood: employee.cap_food ?? 500, capStay: employee.cap_stay ?? 1500,
+    password: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
+  const incomplete = !f.name.trim() || !f.email.trim() || (f.password.trim() && f.password.trim().length < 12);
+  const submit = async () => {
+    setBusy(true); setProblem(null);
+    try {
+      await api.admin.updateEmployee(employee.employee_id, {
+        name: f.name.trim(), role: f.role, email: f.email.trim().toLowerCase(),
+        phone: f.phone.trim() || null, status: f.status, claimsEnabled: f.claimsEnabled,
+        capFood: Number(f.capFood) || 0, capStay: Number(f.capStay) || 0,
+        ...(f.password.trim() ? { password: f.password.trim() } : {}),
+      });
+      onDone();
+    } catch (e) { setProblem(e); }
+    finally { setBusy(false); }
+  };
+  const label = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.12em', color: T.faint, marginBottom: 8 };
+  const field = { width: '100%', padding: '10px 12px', borderRadius: 8, fontSize: 14, background: 'transparent', border: `1px solid ${T.line}`, color: T.text, outline: 'none', fontFamily: 'inherit' };
+  return (
+    <div className="fade" style={{ position: 'fixed', inset: 0, background: T.overlay, zIndex: 60, display: 'flex', alignItems: isPhone ? 'flex-end' : 'center', justifyContent: 'center', padding: isPhone ? 0 : 16 }}>
+      <div className="rise" style={{ width: '100%', maxWidth: 520, background: T.bg, padding: 28, borderRadius: isPhone ? '16px 16px 0 0' : 16, border: `1px solid ${T.line}`, maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
+          <div><div className="tight" style={{ fontSize: 18, fontWeight: 600 }}>Edit employee</div><M style={{ fontSize: 11, color: T.faint }}>{employee.employee_code}</M></div>
+          <button className="press" onClick={onClose} style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
+        </div>
+        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Name</div><input value={f.name} onChange={e => set({name:e.target.value})} style={field} /></div>
+        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Role</div><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{['Trainer','Admin','Accountant','Content Writer','Designer','CEO'].map(r => <button key={r} className="press" onClick={() => set({role:r})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.role===r?T.text:'transparent',color:f.role===r?T.bg:T.mute,border:`1px solid ${f.role===r?T.text:T.line}`}}>{r}</button>)}</div></div>
+        <div style={{ display:'grid', gridTemplateColumns:isPhone?'1fr':'1fr 1fr', gap:16, marginBottom:18 }}>
+          <div><div className="mono" style={label}>Email</div><input type="email" value={f.email} onChange={e => set({email:e.target.value})} style={field} /></div>
+          <div><div className="mono" style={label}>Phone</div><input value={f.phone} onChange={e => set({phone:e.target.value})} style={field} /></div>
+        </div>
+        <div style={{display:'flex',gap:8,marginBottom:18}}>{['Active','Inactive'].map(v => <button key={v} className="press" onClick={() => set({status:v})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.status===v?T.text:'transparent',color:f.status===v?T.bg:T.mute,border:`1px solid ${f.status===v?T.text:T.line}`}}>{v}</button>)}</div>
+        <div style={{ paddingTop:18, borderTop:`1px solid ${T.line}`, marginBottom:18 }}>
+          <button className="press" onClick={() => set({claimsEnabled:!f.claimsEnabled})} style={{display:'flex',alignItems:'center',gap:12,background:'none',border:'none',cursor:'pointer',padding:0,textAlign:'left',color:T.text}}><span style={{width:34,height:20,borderRadius:999,position:'relative',background:f.claimsEnabled?T.accent:T.line}}><span style={{position:'absolute',width:14,height:14,borderRadius:'50%',top:3,left:f.claimsEnabled?17:3,background:T.bg}} /></span><span><span style={{fontSize:14,display:'block'}}>Reimbursement</span><span style={{fontSize:12,color:T.mute}}>Claims access and daily caps</span></span></button>
+        </div>
+        {f.claimsEnabled && <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:16,marginBottom:18}}>{[['Food, per day','capFood'],['Stay, per day','capStay']].map(([lbl,k])=><div key={k}><div className="mono" style={label}>{lbl}</div><input type="number" value={f[k]} onChange={e=>set({[k]:e.target.value})} style={field}/></div>)}</div>}
+        <div style={{marginBottom:18}}><div className="mono" style={label}>Reset password (optional)</div><input value={f.password} onChange={e=>set({password:e.target.value})} placeholder="Leave blank to keep current password" style={field}/></div>
+        {problem && <div style={{fontSize:13,color:T.accent,marginBottom:16,lineHeight:1.5}}>{problem.message}</div>}
+        <div style={{display:'flex',gap:8}}><Btn variant="line" full onClick={onClose}>Cancel</Btn><Btn full busy={busy} disabled={incomplete} onClick={submit}>Save changes</Btn></div>
+      </div>
+    </div>
+  );
+}
+
 function AddEmployee({ onClose, onDone, isPhone }) {
   const T = useT();
   const api = useApi();
