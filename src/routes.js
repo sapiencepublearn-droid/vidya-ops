@@ -175,6 +175,15 @@ function validateOpenFix(fix) {
   }
   return fix;
 }
+// Trainers and Technical Support may punch from anywhere. Their GPS is still
+// recorded as evidence, but low accuracy must not turn an anywhere punch into
+// a geofence failure. School visit check-in/out continues to require accurate GPS.
+function validateFieldFix(fix) {
+  if (fix.isMocked) {
+    throw unprocessable('This device is reporting a mock location. Turn off the mock location app and try again.', 'mock_location');
+  }
+  return fix;
+}
 
 async function permittedSites(actor) {
   // Assignment-restricted, unchanged from the existing model: an employee
@@ -268,7 +277,7 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
     `SELECT role, shift_start, late_grace_minutes FROM employees WHERE employee_id = $1`,
     [req.user.id]))).rows[0];
   const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
-  const cleanFix = validateOpenFix(fix);
+  const cleanFix = anywhere ? validateFieldFix(fix) : validateOpenFix(fix);
   const sites = anywhere ? [] : await permittedSites(req.user);
   const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
   const { site, distance } = matched;
@@ -291,7 +300,7 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
        VALUES ($1, ist_today(), now(), $2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (employee_id, work_date) DO NOTHING
        RETURNING *`,
-      [req.user.id, fix.latitude, fix.longitude, fix.accuracy, site.id, distance,
+      [req.user.id, fix.latitude, fix.longitude, fix.accuracy, site?.id ?? null, distance,
        fix.device ?? {}, status]);
 
     if (!ins.rowCount) return null;
@@ -318,7 +327,7 @@ router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
   const emp = (await tx(req.user, (c) => c.query(
     `SELECT role FROM employees WHERE employee_id = $1`, [req.user.id]))).rows[0];
   const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
-  const cleanFix = validateOpenFix(fix);
+  const cleanFix = anywhere ? validateFieldFix(fix) : validateOpenFix(fix);
   const sites = anywhere ? [] : await permittedSites(req.user);
   const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
   const { site, distance } = matched;
@@ -340,7 +349,7 @@ router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
       `UPDATE attendance SET check_out_time = now(), check_out_latitude=$2, check_out_longitude=$3,
               check_out_accuracy=$4, check_out_location_id=$5, check_out_distance_m=$6, check_out_device=$7
         WHERE attendance_id = $1 RETURNING *`,
-      [cur.attendance_id, fix.latitude, fix.longitude, fix.accuracy, site.id, distance, fix.device ?? {}])).rows[0];
+      [cur.attendance_id, fix.latitude, fix.longitude, fix.accuracy, site?.id ?? null, distance, fix.device ?? {}])).rows[0];
   });
   // A school visit gets a draft the employee can review and send. Office
   // attendance does not: there is no group expecting an update.

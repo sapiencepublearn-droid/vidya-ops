@@ -2029,7 +2029,7 @@ function ATasks({ isPhone }) {
       <Btn variant="solid" disabled={!assignedTo || !title.trim()} busy={busy} onClick={save}>Assign Work</Btn>
     </div>
 
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12,marginBottom:14}}><Eyebrow>Work Assigned for {dateText(date)}</Eyebrow><M style={{fontSize:11,color:T.faint}}>{rows.data?.length || 0} items</M></div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:12,marginBottom:14}}><Eyebrow>Work Assigned for {istDateShort(date)}</Eyebrow><M style={{fontSize:11,color:T.faint}}>{rows.data?.length || 0} items</M></div>
     {rows.loading ? <Rows n={5} /> : rows.error ? <ErrorBlock error={rows.error} onRetry={rows.reload} /> : !rows.data?.length ? <Blank title="No work assigned for this date" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{rows.data.map(t=><div key={t.task_id} style={{padding:'14px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:14}}><div><div style={{fontSize:14,fontWeight:500}}>{t.title}</div><M style={{fontSize:11,color:T.faint,display:'block',marginTop:5}}>{t.employee_name} · {t.employee_code} · {t.priority}</M></div><Status state={t.status}/></div>{t.description&&<div style={{fontSize:12,color:T.mute,marginTop:7,lineHeight:1.5}}>{t.description}</div>}<M style={{fontSize:11,color:T.faint,display:'block',marginTop:7}}>By {t.assigner_name} · Due {to12(t.due_time)}</M></div>)}</div>}
   </>;
 }
