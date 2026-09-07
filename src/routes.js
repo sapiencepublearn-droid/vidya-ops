@@ -904,6 +904,60 @@ router.get('/tasks/:id', uuidParam('id'), wrap(async (req, res) => {
 }));
 
 
+
+/* ───────────────────────────────────────────── daily work done */
+router.get('/work-done/me', wrap(async (req, res) => {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : null;
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT work_done_id, work_date, summary, created_at, updated_at
+       FROM employee_work_done
+      WHERE employee_id=$1
+        AND ($2::date IS NULL OR work_date >= $2::date)
+        AND ($3::date IS NULL OR work_date <= $3::date)
+      ORDER BY work_date DESC`, [req.user.id, from, to]));
+  res.json(rows);
+}));
+
+router.put('/work-done/me', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({
+    workDate: isoDate,
+    summary: z.string().trim().min(1).max(5000),
+  }).strict(), req.body);
+  const today = (await pool.query(`SELECT ist_today() AS d`)).rows[0].d;
+  if (f.workDate > today.toISOString().slice(0, 10)) {
+    throw unprocessable('You cannot record Work Done for a future date.', 'future_date');
+  }
+  const row = await tx(req.user, (c) => c.query(
+    `INSERT INTO employee_work_done (employee_id, work_date, summary)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (employee_id, work_date)
+     DO UPDATE SET summary=EXCLUDED.summary, updated_at=now()
+     RETURNING *`, [req.user.id, f.workDate, f.summary])).then((r) => r.rows[0]);
+  res.json(row);
+})));
+
+/* Daily Work Done: employee-authored daily notes. */
+router.get('/work-done/me', wrap(async (req, res) => {
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(req.query.from || '') ? req.query.from : null;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(req.query.to || '') ? req.query.to : null;
+  const { rows } = await tx(req.user, (c) => c.query(
+    `SELECT work_done_id, work_date, summary, created_at, updated_at FROM employee_work_done
+      WHERE employee_id=$1 AND ($2::date IS NULL OR work_date >= $2::date) AND ($3::date IS NULL OR work_date <= $3::date)
+      ORDER BY work_date DESC`, [req.user.id, from, to]));
+  res.json(rows);
+}));
+router.put('/work-done/me', idempotent(wrap(async (req, res) => {
+  const f = parse(z.object({ workDate: isoDate, summary: z.string().trim().min(1).max(5000) }).strict(), req.body);
+  const today = (await pool.query(`SELECT ist_today() AS d`)).rows[0].d;
+  if (f.workDate > today.toISOString().slice(0, 10)) throw unprocessable('You cannot record Work Done for a future date.', 'future_date');
+  const row = await tx(req.user, (c) => c.query(
+    `INSERT INTO employee_work_done (employee_id, work_date, summary) VALUES ($1,$2,$3)
+     ON CONFLICT (employee_id, work_date) DO UPDATE SET summary=EXCLUDED.summary, updated_at=now() RETURNING *`,
+    [req.user.id, f.workDate, f.summary])).then((r) => r.rows[0]);
+  res.json(row);
+})));
+
 router.get('/admin/tasks', adminOnly, wrap(async (req, res) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '') ? req.query.date : null;
   if (!date) throw unprocessable('Choose a valid date.', 'invalid_date');
@@ -1586,6 +1640,12 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         WHERE r.contribution_id = ANY($1::uuid[])
         ORDER BY r.created_at ASC`, [contributions.map((x) => x.contribution_id)])).rows : [];
 
+    const workDone = (await c.query(
+      `SELECT work_done_id, work_date, summary, created_at, updated_at
+         FROM employee_work_done
+        WHERE employee_id=$1 AND work_date BETWEEN $2::date AND $3::date
+        ORDER BY work_date DESC`, [req.params.id, from, to])).rows;
+
     const latAttempts = (await c.query(
       `SELECT attempt_id, started_at, submitted_at, score, total
          FROM lat_attempts
@@ -1634,6 +1694,7 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
       claims,
       contributions,
       contributionReplies,
+      workDone,
       latAttempts,
     };
   });

@@ -416,6 +416,7 @@ function Employee({ me, onOut, theme, setTheme }) {
                 : tab === 'attendance' ? <EAttendance profile={profile} />
                   : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
                     : tab === 'claims' ? <EClaims profile={profile} />
+                    : tab === 'contributions' ? <EContributions />
                     : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} onOpenNews={() => setNewsOpen(true)} />}
         </div>
 
@@ -1316,7 +1317,7 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
   if (report.loading) return <><button onClick={onBack} style={{ background: 'none', border: 'none', color: T.mute, padding: 0, marginBottom: 20, cursor: 'pointer' }}>← Back</button><h1 className="tight" style={{ fontSize: 24, fontWeight: 600 }}>Employee Dashboard</h1><div style={{ height: 32 }} /><Rows n={6} /></>;
   if (report.error) return <><button onClick={onBack} style={{ background: 'none', border: 'none', color: T.mute, padding: 0, marginBottom: 20, cursor: 'pointer' }}>← Back</button><ErrorBlock error={report.error} onRetry={report.reload} /></>;
 
-  const { employee, summary, attendance, schoolVisits, tasks, claims, latAttempts } = report.data;
+  const { employee, summary, attendance, schoolVisits, tasks, claims, contributions, contributionReplies, workDone = [], latAttempts } = report.data;
   const attMap = new Map(attendance.map((a) => [dayKey(a.work_date), a]));
   const visitsByDay = new Map();
   schoolVisits.forEach((v) => { const k = dayKey(v.work_date); visitsByDay.set(k, [...(visitsByDay.get(k) || []), v]); });
@@ -1377,9 +1378,9 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
           <div style={{ marginBottom: 12 }}><Eyebrow>Contributions / Inconveniences</Eyebrow><div style={{ fontSize: 12, color: T.mute, marginTop: -4 }}>Contributions and inconveniences, shown day by day.</div></div>
           {(() => {
             const byDay = new Map();
-            (report.data?.contributions || []).forEach((x) => { const k = dayKey(x.work_date); byDay.set(k, [...(byDay.get(k) || []), x]); });
+            (contributions || []).forEach((x) => { const k = dayKey(x.work_date); byDay.set(k, [...(byDay.get(k) || []), x]); });
             const rows = Array.from(byDay.entries()).sort((a,b) => b[0].localeCompare(a[0]));
-            const replies = report.data?.contributionReplies || [];
+            const replies = contributionReplies || [];
             return rows.length ? rows.map(([day, items]) => (
               <div key={day} style={{ padding: '11px 0', borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} entries</div>
