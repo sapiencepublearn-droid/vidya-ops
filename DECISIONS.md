@@ -112,3 +112,6 @@ No Redis, no queues, no read replicas, no microservices. Five employees
 generate a few hundred requests a day. Correct indexes and pagination
 are enough, and every additional moving part is another thing to
 operate.
+
+## Attendance sessions — 2026-09-07
+Attendance is a daily reporting bucket containing one or more work sessions. A session is one Punch In → End Day pair. Closed sessions may repeat on the same IST business date, while a partial unique index permits at most one active session at a time. School visits remain separate records and must be closed before ending a Trainer session. Pending tasks are not moved at session close because another session may start later the same night; still-open tasks naturally carry into the next day through the `due_date <= ist_today()` task view.

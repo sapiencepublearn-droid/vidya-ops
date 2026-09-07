@@ -134,7 +134,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
     submitTask: (id, body, key) => request(`/tasks/${id}/submit`, { method: 'POST', body, idempotencyKey: key }),
-    endDayTasks: (body, key) => request('/tasks/end-day', { method: 'POST', body, idempotencyKey: key }),
+    endDay: (body, key) => request('/attendance/end-day', { method: 'POST', body, idempotencyKey: key }),
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
     createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),
@@ -175,14 +175,28 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         return request(`/admin/claims${q ? `?${q}` : ''}`);
       },
       claimCycles: () => request('/admin/claims/cycles'),
-      reviewClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/review`, { method: 'POST', idempotencyKey: key }),
-      closeClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/close`, { method: 'POST', idempotencyKey: key }),
-      clearClaimCycle: (cycle, key) => request(`/admin/claims/cycles/${cycle}/clear`, { method: 'POST', body: { confirm: 'CLEAR' }, idempotencyKey: key }),
+      // Cycle dates are a date-only API contract. Normalize legacy/driver
+      // timestamp values such as 2026-09-05T00:00:00.000Z before building
+      // the route so weekly actions never fail validation with 422.
+      cycleDate: (cycle) => String(cycle || '').slice(0, 10),
+      reviewClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/review`, { method: 'POST', idempotencyKey: key });
+      },
+      closeClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/close`, { method: 'POST', idempotencyKey: key });
+      },
+      clearClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/clear`, { method: 'POST', body: { confirm: 'CLEAR' }, idempotencyKey: key });
+      },
       exportClaims: async (cycle) => {
-        const blob = await requestBlob(`/admin/claims/cycles/${cycle}/export.xls`);
+        const c = String(cycle || '').slice(0, 10);
+        const blob = await requestBlob(`/admin/claims/cycles/${encodeURIComponent(c)}/export.xls`);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = `claims-${cycle}.xls`;
+        a.href = url; a.download = `claims-${c}.xls`;
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
       },

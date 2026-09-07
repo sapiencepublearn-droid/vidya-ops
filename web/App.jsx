@@ -392,53 +392,93 @@ function Employee({ me, onOut, theme, setTheme }) {
   const [openTask, setOpenTask] = useState(null);
   const [latOpen, setLatOpen] = useState(false);
   const [newsOpen, setNewsOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const profile = useResource(() => api.me(), []);
   const lat = useResource(() => api.latToday(), []);
   const broadcasts = useResource(() => api.broadcasts(), []);
 
   const nav = [
     ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
-    ['contributions', 'Contributions'],
+    ['contributions', 'Contributions'], ['workdone', 'Work Done'],
     ...(profile.data?.claims_enabled ? [['claims', 'Claims']] : []),
     ['profile', 'Profile'],
   ];
 
-  return (
-    <div style={{ display: 'flex', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 420, minHeight: '100vh', borderLeft: `1px solid ${T.line}`, borderRight: `1px solid ${T.line}`, paddingBottom: 84, position: 'relative' }}>
-        <div key={newsOpen ? 'news' : latOpen ? 'lat' : openTask || tab} className="rise">
-          {newsOpen ? <BroadcastList T={T} api={api} broadcasts={broadcasts} onBack={() => setNewsOpen(false)} />
-            : latOpen ? <LatScreen T={T} api={api} lat={lat} onBack={() => { setLatOpen(false); lat.reload(); }} />
-            : openTask ? <TaskDetail id={openTask} onBack={() => setOpenTask(null)} />
-            : tab === 'home' ? <EHome me={me} profile={profile} onOpenTask={setOpenTask} lat={lat}
-                onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
-              : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
-                : tab === 'attendance' ? <EAttendance profile={profile} />
-                  : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
-                    : tab === 'claims' ? <EClaims profile={profile} />
-                    : tab === 'contributions' ? <EContributions />
-                    : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} onOpenNews={() => setNewsOpen(true)} />}
-        </div>
+  const selectTab = (k) => {
+    setOpenTask(null); setLatOpen(false); setNewsOpen(false); setTab(k); setSidebarOpen(false);
+  };
 
-        <nav style={{
-          position: 'fixed', bottom: 0, width: '100%', maxWidth: 420, display: 'flex',
-          background: T.bg, borderTop: `1px solid ${T.line}`,
+  const content = (
+    <div key={newsOpen ? 'news' : latOpen ? 'lat' : openTask || tab} className="rise">
+      {newsOpen ? <BroadcastList T={T} api={api} broadcasts={broadcasts} onBack={() => setNewsOpen(false)} />
+        : latOpen ? <LatScreen T={T} api={api} lat={lat} onBack={() => { setLatOpen(false); lat.reload(); }} />
+        : openTask ? <TaskDetail id={openTask} onBack={() => setOpenTask(null)} />
+        : tab === 'home' ? <EHome me={me} profile={profile} onOpenTask={setOpenTask} lat={lat}
+            onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
+          : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
+            : tab === 'attendance' ? <EAttendance profile={profile} />
+              : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
+                : tab === 'claims' ? <EClaims profile={profile} />
+                : tab === 'contributions' ? <EContributions />
+                : tab === 'workdone' ? <EWorkDone />
+                : <EProfile profile={profile} onOut={onOut} theme={theme} setTheme={setTheme} onOpenNews={() => setNewsOpen(true)} />}
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: '100vh', background: T.bg, color: T.text }}>
+      <header style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '14px 20px', borderBottom: `1px solid ${T.line}`,
+        position: 'sticky', top: 0, background: T.bg, zIndex: 20,
+      }}>
+        <button className="press" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"
+          style={{ background: 'none', border: 'none', color: T.text, fontSize: 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>☰</button>
+        <Brand size={22} showName={false} />
+        <ThemeToggle theme={theme} setTheme={setTheme} />
+      </header>
+
+      <div style={{ display: 'flex', minHeight: 'calc(100vh - 57px)' }}>
+        <aside style={{
+          width: 220, flexShrink: 0, borderRight: `1px solid ${T.line}`, padding: '24px 14px',
+          display: 'flex', flexDirection: 'column', gap: 4, position: 'sticky', top: 57, height: 'calc(100vh - 57px)', boxSizing: 'border-box',
         }}>
+          <div style={{ padding: '0 10px 20px' }}><Brand size={22} /></div>
           {nav.map(([k, label]) => {
             const on = tab === k && !openTask && !latOpen && !newsOpen;
-            return (
-              <button key={k} className="press" onClick={() => { setOpenTask(null); setLatOpen(false); setNewsOpen(false); setTab(k); }}
-                style={{
-                  flex: 1, padding: '14px 0', background: 'none', border: 'none', cursor: 'pointer',
-                  color: on ? T.text : T.faint, fontSize: 12, position: 'relative',
-                }}>
-                {on && <span style={{ position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)', width: 18, height: 1.5, background: T.accent }} />}
-                {label}
-              </button>
-            );
+            return <button key={k} className="press" onClick={() => selectTab(k)}
+              style={{ textAlign: 'left', padding: '11px 12px', borderRadius: 8, background: on ? T.soft : 'none', border: 'none', cursor: 'pointer', color: on ? T.text : T.mute, fontSize: 13, fontWeight: on ? 600 : 400 }}>
+              {label}
+            </button>;
           })}
-        </nav>
+        </aside>
+
+        <main style={{ flex: 1, minWidth: 0, maxWidth: 1100, margin: '0 auto', width: '100%' }}>
+          {content}
+        </main>
       </div>
+
+      {sidebarOpen && (
+        <>
+          <div onClick={() => setSidebarOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.45)', zIndex: 40 }} />
+          <aside className="rise" style={{ position: 'fixed', top: 0, left: 0, bottom: 0, width: '82%', maxWidth: 320, background: T.bg, borderRight: `1px solid ${T.line}`, zIndex: 50, padding: '24px 20px', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
+              <Brand size={24} />
+              <button className="press" onClick={() => setSidebarOpen(false)} aria-label="Close navigation" style={{ background: 'none', border: 'none', color: T.mute, fontSize: 24, cursor: 'pointer' }}>×</button>
+            </div>
+            {nav.map(([k, label]) => {
+              const on = tab === k && !openTask && !latOpen && !newsOpen;
+              return <button key={k} className="press" onClick={() => selectTab(k)}
+                style={{ textAlign: 'left', padding: '13px 12px', borderRadius: 8, background: on ? T.soft : 'none', border: 'none', cursor: 'pointer', color: on ? T.text : T.mute, fontSize: 14, fontWeight: on ? 600 : 400 }}>
+                {label}
+              </button>;
+            })}
+            <div style={{ marginTop: 'auto', paddingTop: 20, borderTop: `1px solid ${T.line}` }}>
+              <button className="press" onClick={() => { setSidebarOpen(false); selectTab('profile'); }} style={{ width: '100%', textAlign: 'left', padding: '13px 12px', background: 'none', border: 'none', color: T.mute, fontSize: 13 }}>Profile & Settings</button>
+            </div>
+          </aside>
+        </>
+      )}
     </div>
   );
 }
@@ -448,10 +488,11 @@ function EHome({ me, profile, onOpenTask, lat, onOpenLat, broadcasts, onOpenNews
   const api = useApi();
   const attendance = useResource(() => api.myAttendance(), []);
   const tasks = useResource(() => api.myTasks('today'), []);
-  const today = attendance.data?.[0];
-  const isToday = today && new Date(today.work_date).toISOString().slice(0, 10) ===
-    new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  const att = isToday ? today : null;
+  const todayKey = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  // Only an open session controls the Punch panel. Closed sessions are history
+  // and must never block a later Punch In on the same business day.
+  const att = (attendance.data || []).find((a) =>
+    String(a.work_date).slice(0, 10) === todayKey && a.check_in_time && !a.check_out_time) || null;
 
   const done = (tasks.data || []).filter((t) => t.effective_status === 'Completed').length;
 
@@ -679,6 +720,67 @@ function ELat({ lat, onOpen }) {
   );
 }
 
+function EWorkDone() {
+  const T = useT();
+  const api = useApi();
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const [date, setDate] = useState(today);
+  const [summary, setSummary] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const data = useResource(() => api.workDone(date, date), [date]);
+
+  useEffect(() => {
+    setSaved(false);
+    setProblem(null);
+    const existing = data.data?.[0];
+    setSummary(existing?.summary || '');
+  }, [data.data]);
+
+  const save = async () => {
+    if (!summary.trim() || date > today) return;
+    setBusy(true); setProblem(null); setSaved(false);
+    try {
+      await api.saveWorkDone({ workDate: date, summary: summary.trim() }, newActionKey());
+      await data.reload();
+      setSaved(true);
+    } catch (e) { setProblem(e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ padding: '32px 24px 0' }}>
+      <div style={{ marginBottom: 28 }}>
+        <h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Work Done</h1>
+        <div style={{ fontSize: 12, color: T.mute, marginTop: 7 }}>Update what you actually completed on a specific day. This is separate from assigned work.</div>
+      </div>
+
+      <Field label="Date"><Input type="date" value={date} max={today} onChange={(e) => setDate(e.target.value)} /></Field>
+      {data.loading ? <Rows n={2} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : (
+        <>
+          <Field label="Work Done">
+            <textarea rows={7} value={summary} onChange={(e) => { setSummary(e.target.value); setSaved(false); }}
+              placeholder="Write what you actually completed, important follow-ups, school work, office work, or other contributions for this day…"
+              style={{ width:'100%', boxSizing:'border-box', padding:12, border:`1px solid ${T.line}`, borderRadius:8, background:T.bg, color:T.text, resize:'vertical', fontSize:14, lineHeight:1.5 }} />
+          </Field>
+          {problem && <div style={{ fontSize:13, color:T.accent, marginBottom:14 }}>{problem.message}</div>}
+          {saved && <div style={{ fontSize:12, color:T.mute, marginBottom:14 }}>Work Done updated for {istDateShort(date)}.</div>}
+          <Btn variant="accent" full busy={busy} disabled={!summary.trim()} onClick={save}>{data.data?.length ? 'Update Work Done' : 'Save Work Done'}</Btn>
+        </>
+      )}
+
+      <div style={{ marginTop: 36, marginBottom: 40 }}>
+        <Eyebrow>Recent entries</Eyebrow>
+        {(() => {
+          const recent = data.data || [];
+          return recent.length ? recent.map((x) => <div key={x.work_done_id} style={{ padding:'13px 0', borderTop:`1px solid ${T.line}` }}><div style={{ fontSize:12, fontWeight:500 }}>{istDateShort(x.work_date)}</div><div style={{ fontSize:12, color:T.mute, lineHeight:1.5, marginTop:5 }}>{x.summary}</div></div>) : <Blank title="No Work Done recorded for this date" />;
+        })()}
+      </div>
+    </div>
+  );
+}
+
 function EAttendance({ profile }) {
   const T = useT();
   const api = useApi();
@@ -749,7 +851,7 @@ function EContributions() {
                 return <div key={x.contribution_id} style={{ padding: '15px 0', borderBottom: `1px solid ${T.line}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
                     <div style={{ minWidth: 0 }}><M style={{ fontSize: 10, color: T.faint }}>{String(x.work_date).slice(0,10)}</M><div style={{ fontSize: 14, fontWeight: 500, marginTop: 5 }}>{x.title}</div><div style={{ fontSize: 12, color: T.mute, marginTop: 4 }}>{x.entry_type}</div></div>
-                    <div style={{ textAlign: 'right', flexShrink: 0 }}>{x.amount_paise ? <M style={{ fontSize: 13 }}>{rupees(x.amount_paise)}</M> : null}<Status state={x.status === 'Replied' ? 'Completed' : 'Pending'} /></div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}><Status state={x.status === 'Replied' ? 'Completed' : 'Pending'} /></div>
                   </div>
                   <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.55, marginTop: 9 }}>{x.description}</div>
                   {rs.map((r) => <div key={r.reply_id} style={{ marginTop: 10, padding: '10px 12px', borderLeft: `2px solid ${T.line}`, background: T.sub }}><div style={{ fontSize: 10, color: T.faint }}>{r.author_name} · {istTime(r.created_at)}</div><div style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{r.message}</div></div>)}
@@ -815,11 +917,11 @@ function EClaims({ profile }) {
             <div style={{ marginBottom: 36 }}>
               <Eyebrow>Claimed</Eyebrow>
               <div className="tight" style={{ fontSize: 34, fontWeight: 600, lineHeight: 1 }}>{rupees(total)}</div>
-              {pending > 0 && <div style={{ fontSize: 12, color: T.accent, marginTop: 10 }}>{rupees(pending)} awaiting approval</div>}
+              {pending > 0 && <div style={{ fontSize: 12, color: T.accent, marginTop: 10 }}>{rupees(pending)} in the current weekly review</div>}
             </div>
 
             <Eyebrow>History</Eyebrow>
-            {!claims.data.length ? <Blank title="No claims yet" hint="Add one with a photo of the bill." />
+            {!claims.data.length ? <Blank title="No claims yet" hint="Add the expense details; a bill is optional." />
               : <div style={{ borderTop: `1px solid ${T.line}` }}>
                 {claims.data.map((c) => (
                   <div key={c.claim_id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: `1px solid ${T.line}` }}>
@@ -1384,7 +1486,7 @@ function EmployeeDashboard({ employeeId, isPhone, onBack }) {
             return rows.length ? rows.map(([day, items]) => (
               <div key={day} style={{ padding: '11px 0', borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 7 }}>{dateText(day)} · {items.length} entries</div>
-                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span>{x.amount_paise ? <M style={{fontSize:11}}>{fmtMoney(x.amount_paise)}</M> : null}</div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
+                {items.map((x) => <div key={x.contribution_id} style={{ padding: '8px 0' }}><div style={{ display:'flex',justifyContent:'space-between',gap:10 }}><span style={{fontSize:12,fontWeight:500}}>{x.title}</span></div><div style={{fontSize:11,color:T.mute,marginTop:3}}>{x.entry_type} · {x.status}</div><div style={{fontSize:11,color:T.mute,marginTop:3,lineHeight:1.45}}>{x.description}</div>{replies.filter(r=>r.contribution_id===x.contribution_id).map(r=><div key={r.reply_id} style={{marginTop:6,padding:'7px 9px',borderLeft:`2px solid ${T.line}`}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:11}}>{r.message}</div></div>)}</div>)}
               </div>
             )) : <div style={{ fontSize: 12, color: T.mute, paddingTop: 4 }}>No contributions / inconveniences in this period.</div>;
           })()}
@@ -1500,6 +1602,9 @@ function AAttendance({ isPhone }) {
                         ? `${r.location_type === 'SCHOOL' ? 'School' : r.location_type === 'OFFICE' ? 'Office' : (r.role === 'Trainer' || r.role === 'Technical Support') ? 'Field' : '—'} · ${r.site_name || ((r.role === 'Trainer' || r.role === 'Technical Support') ? 'Any location' : '—')}${r.site_zone ? ` · ${r.site_zone}` : ''}`
                         : r.role}
                     </div>
+                    {r.attendance_sessions > 0 && <M style={{ fontSize: 10, color: T.faint, display: 'block', marginTop: 4 }}>
+                      {r.attendance_sessions} session{r.attendance_sessions > 1 ? 's' : ''}{r.open_sessions ? ' · active now' : ''}
+                    </M>}
                   </div>
                   <Status state={r.status || 'Absent'} />
                 </div>
@@ -1702,7 +1807,7 @@ function AClaims({ isPhone }) {
               <div key={c.cycle_start} style={{ padding: '16px 0', borderBottom: `1px solid ${T.line}`, display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ flex: 1, minWidth: 220 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>{cycleLabelFor(c)}</div>
-                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>{c.bill_count} bills · {rupees(c.total_paise)}</M>
+                  <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>{c.bill_count} expense entries · {rupees(c.total_paise)}</M>
                 </div>
                 <button className="press" disabled={!!acting} onClick={() => exportAndClearCycle(c.cycle_start)} style={{
                   padding: '9px 12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg,
@@ -1741,7 +1846,7 @@ function AClaims({ isPhone }) {
             {selectedEmployee.employee_name}
           </h1>
           <div style={{ fontSize: 12, color: T.mute, marginTop: 6 }}>
-            {employeeClaims.length} bill{employeeClaims.length === 1 ? '' : 's'}
+            {employeeClaims.length} expense {employeeClaims.length === 1 ? 'entry' : 'entries'}
           </div>
         </div>
 
@@ -1856,7 +1961,7 @@ function AClaims({ isPhone }) {
 
       {claims.loading ? <Rows n={5} />
         : claims.error ? <ErrorBlock error={claims.error} onRetry={claims.reload} />
-          : !activeCycle ? <Blank title="No claim cycles yet" hint="Weekly claims will appear here once bills are submitted." />
+          : !activeCycle ? <Blank title="No claim cycles yet" hint="Weekly claims will appear here once expenses are submitted." />
           : (
             <>
               <div style={{
@@ -1877,7 +1982,7 @@ function AClaims({ isPhone }) {
                   }}>Employees</div>
                   <div className="tight" style={{ fontSize: 22, fontWeight: 600 }}>{employees.length}</div>
                   <div style={{ fontSize: 11, color: T.mute, marginTop: 4 }}>
-                    {cycleClaims.length} bill{cycleClaims.length === 1 ? '' : 's'}
+                    {cycleClaims.length} expense {cycleClaims.length === 1 ? 'entry' : 'entries'}
                   </div>
                 </div>
               </div>
@@ -1898,7 +2003,7 @@ function AClaims({ isPhone }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 14, fontWeight: 500 }}>{e.employee_name}</div>
                           <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 5 }}>
-                            {e.bill_count} bill{e.bill_count === 1 ? '' : 's'}
+                            {e.bill_count} expense {e.bill_count === 1 ? 'entry' : 'entries'}
                           </M>
                         </div>
                         <div style={{ textAlign: 'right', minWidth: isPhone ? 92 : 240 }}>
@@ -1945,7 +2050,7 @@ function AContributions({ isPhone }) {
   return <>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:24}}><div><h1 className="tight" style={{fontSize:24,fontWeight:600,margin:0}}>Contributions / Inconveniences</h1><div style={{fontSize:13,color:T.mute,marginTop:6}}>Additional contributions and inconveniences submitted by employees.</div></div></div>
     <div style={{display:'flex',gap:8,marginBottom:24}}>{['All','Open','Replied'].map(x=><button key={x} className="press" onClick={()=>setFilter(x)} style={{padding:'8px 12px',borderRadius:8,border:`1px solid ${filter===x?T.text:T.line}`,background:filter===x?T.text:'transparent',color:filter===x?T.bg:T.mute,fontSize:12}}>{x}</button>)}</div>
-    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}>{x.amount_paise ? <M style={{fontSize:13}}>{rupees(x.amount_paise)}</M> : null}<div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
+    {data.loading ? <Rows n={5} /> : data.error ? <ErrorBlock error={data.error} onRetry={data.reload} /> : !visible.length ? <Blank title="No entries" /> : <div style={{borderTop:`1px solid ${T.line}`}}>{visible.map(x=>{const rs=replyMap.get(x.contribution_id)||[]; return <div key={x.contribution_id} style={{padding:'16px 0',borderBottom:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',gap:16,flexWrap:'wrap'}}><div><div style={{fontSize:14,fontWeight:500}}>{x.title}</div><M style={{fontSize:11,color:T.faint}}>{x.employee_name} · {String(x.work_date).slice(0,10)} · {x.entry_type}</M></div><div style={{textAlign:'right'}}><div style={{fontSize:11,color:T.mute,marginTop:4}}>{x.status}</div></div></div><div style={{fontSize:12,color:T.mute,lineHeight:1.55,marginTop:9}}>{x.description}</div>{rs.map(r=><div key={r.reply_id} style={{marginTop:10,padding:'9px 11px',borderLeft:`2px solid ${T.line}`,background:T.sub}}><div style={{fontSize:10,color:T.faint}}>{r.author_name}</div><div style={{fontSize:12,marginTop:3}}>{r.message}</div></div>)}<div style={{marginTop:11}}><Btn variant="line" onClick={()=>{setReplyFor(x.contribution_id);setReply('')}}>{rs.length?'Reply again':'Reply'}</Btn></div></div>})}</div>}
     {replyFor && <div className="fade" style={{position:'fixed',inset:0,background:T.overlay,display:'flex',alignItems:'flex-end',justifyContent:'center',zIndex:50}}><div className="rise" style={{width:'100%',maxWidth:520,background:T.bg,padding:24,borderTop:`1px solid ${T.line}`}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:18}}><div className="tight" style={{fontSize:18,fontWeight:600}}>Reply to employee</div><button className="press" onClick={()=>setReplyFor(null)} style={{background:'none',border:'none',color:T.faint,fontSize:16}}>×</button></div><Field label="Reply"><textarea autoFocus rows={5} value={reply} onChange={e=>setReply(e.target.value)} placeholder="Write a clear response or acknowledgement…" style={{width:'100%',padding:12,border:`1px solid ${T.line}`,borderRadius:8,background:T.bg,color:T.text,resize:'vertical',fontSize:14}} /></Field><div style={{display:'flex',gap:8}}><Btn variant="line" full onClick={()=>setReplyFor(null)}>Cancel</Btn><Btn variant="accent" full busy={busy} disabled={!reply.trim()} onClick={sendReply}>Send Reply</Btn></div></div></div>}
   </>;
 }
