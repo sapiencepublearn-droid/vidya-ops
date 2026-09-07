@@ -370,10 +370,10 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 const historySections = [
   ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
-  ['Books & Payment', [['booksPayment.lkg','LKG'], ['booksPayment.ukg','UKG'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValue2526','SP Invoice Value (25-26)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (Additional Orders)'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']]],
-  ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy'], ['deliverables1.teachersManual1','Teachers Manual 1'], ['deliverables1.teachersManual2','Teachers Manual 2'], ['deliverables1.flashCards','Flash Cards']]],
-  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App / Kids App Comments']]],
-  ['Deliverables 3', [['deliverables3.questionPaper','Question Paper'], ['deliverables3.progressCard','Progress Card']]],
+  ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.lkgRemarks','LKG — Remarks'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.ukgRemarks','UKG — Remarks'], ['booksPayment.discount','Discount — Initial Count'], ['booksPayment.discountAdditionalOrders','Discount — Additional Orders'], ['booksPayment.discountReturns','Discount — Returns'], ['booksPayment.discountRemarks','Discount — Remarks'], ['booksPayment.spInvoiceValue2526','SP Invoice Value (25-26)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (Additional Orders)'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Remarks']]],
+  ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual 1 — Count'], ['deliverables1.teachersManual1Date','Teachers Manual 1 — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Cards — Count'], ['deliverables1.flashCardsDate','Flash Cards — Date']]],
+  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App / Kids App Comments']]],
+  ['Deliverables 3', [['deliverables3.questionPaper','Question Paper — Count'], ['deliverables3.questionPaperDate','Question Paper — Date'], ['deliverables3.progressCard','Progress Card — Count'], ['deliverables3.progressCardDate','Progress Card — Date']]],
   ['Services', [['services.t1','T1'], ['services.t2','T2'], ['services.generalVisit','General Visit'], ['services.atu2','ATU 2'], ['services.atu2Comments','ATU 2 Comments'], ['services.sim2','SIM 2'], ['services.sim2Comments','SIM 2 Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Comments','SIM 3 Comments']]],
   ['Current status', [['currentStatus','Current Status'], ['comments','Comments']]],
 ];
@@ -423,23 +423,47 @@ async function readXlsxFiles(file) {
   };
   const sharedXml = await get('xl/sharedStrings.xml');
   const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si => Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
-  const sheetXml = await get('xl/worksheets/sheet1.xml');
-  if (!sheetXml) throw new Error('The first worksheet could not be read.');
+
+  // Resolve the worksheet by workbook metadata instead of assuming Sheet1.
+  // Real school files often have an extra cover/instructions sheet first.
+  const workbookXml = await get('xl/workbook.xml');
+  const relsXml = await get('xl/_rels/workbook.xml.rels');
+  const workbookDoc = workbookXml ? new DOMParser().parseFromString(workbookXml,'application/xml') : null;
+  const relsDoc = relsXml ? new DOMParser().parseFromString(relsXml,'application/xml') : null;
+  const relMap = {};
+  relsDoc?.querySelectorAll('Relationship').forEach(r => relMap[r.getAttribute('Id')] = r.getAttribute('Target'));
+  const sheets = Array.from(workbookDoc?.querySelectorAll('sheet') || []);
+  let chosen = null;
+  for (const sh of sheets) {
+    const name = normExcel(sh.getAttribute('name'));
+    const target = relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')];
+    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : '';
+    if (/school\s*name|school\s*history/i.test(name) || /school\s*history/i.test(path)) { chosen = { name, path }; break; }
+  }
+  if (!chosen) {
+    const sh = sheets[0];
+    const target = sh ? (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]) : null;
+    chosen = { name: normExcel(sh?.getAttribute('name') || 'Sheet1'), path: target ? (target.startsWith('/') ? target.slice(1) : `xl/${target}`) : 'xl/worksheets/sheet1.xml' };
+  }
+  const sheetXml = await get(chosen.path || 'xl/worksheets/sheet1.xml');
+  if (!sheetXml) throw new Error('The School History worksheet could not be read.');
   const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
   const cells = {};
   doc.querySelectorAll('sheetData > row > c').forEach(c => {
     const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
     let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
     if (type === 's') value = shared[Number(value)] ?? '';
+    if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
     cells[ref] = String(value).trim();
   });
-  return { cells, sheetName: 'Sheet1' };
+  return { cells, sheetName: chosen.name };
 }
 
 const excelText = (cells, ref) => String(cells[ref] ?? '').trim();
-const labelValue = (value, label) => String(value || '').replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
+const normExcel = (v) => String(v ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+const labelValue = (value, label) => normExcel(value).replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
 const excelDateText = (value) => {
-  const raw = String(value || '').trim();
+  const raw = normExcel(value);
   if (!raw) return '';
   if (/^\d+(?:\.\d+)?$/.test(raw)) {
     const serial = Number(raw);
@@ -451,79 +475,101 @@ const excelDateText = (value) => {
   return raw;
 };
 const splitContact = (value) => {
-  const phone = (String(value).match(/(?:\+?\d[\d\s().-]{7,}\d)/) || [])[0] || '';
-  const name = phone ? String(value).replace(phone, '').replace(/[|–—-]+\s*$/,'').trim() : String(value).trim();
+  const raw = normExcel(value);
+  const phone = (raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/) || [])[0] || '';
+  const name = phone ? raw.replace(phone, '').replace(/[|–—-]+\s*$/,'').trim() : raw;
   return { name, phone: phone.trim() };
 };
 
+// Excel import deliberately uses a row/column map instead of positional
+// "next cell" logic. This is important because the supplied School History
+// sheet contains merged cells. A merged range must never cause the value from
+// the next row to be attached to the previous label.
 function importSchoolHistoryTemplate(cells, current) {
   const out = JSON.parse(JSON.stringify(current || {}));
   const set = (path, value) => {
-    const v = String(value ?? '').trim();
-    if (v) Object.assign(out, setPath(out, path, v));
+    const v = normExcel(value);
+    if (v && v !== '-' && v !== '—') Object.assign(out, setPath(out, path, v));
   };
-  const clean = (value, label) => {
-    const v = String(value ?? '').trim();
-    if (!v) return '';
-    return v.replace(new RegExp(`^${label}\\s*:\\s*`, 'i'), '').trim();
+  const read = (ref, date = false) => {
+    const v = excelText(cells, ref);
+    return date ? excelDateText(v) : v;
   };
-  const first = (...refs) => refs.map(r => excelText(cells, r)).find(Boolean) || '';
+  const firstValue = (...refs) => refs.map(read).map(normExcel).find(Boolean) || '';
+  const clean = (value, label) => labelValue(value, label);
 
-  // The supplied workbook stores labels in column A and the actual values
-  // beside them. Older populated copies may put "LABEL: value" in one cell,
-  // so both forms are supported.
-  const schoolName = clean(first('B2','A2'), 'School Name');
-  const location = clean(first('B3','A3'), 'LOCATION');
-  const vintage = clean(first('C3','D3'), 'VINTAGE');
-  const books = clean(first('D3','E3'), 'BOOKS');
-  const category = clean(first('E3','F3'), 'CATEGORY');
-  set('location', location);
-  set('vintage', vintage);
-  set('books', books);
-  set('category', category);
+  // Header: A2:F2 is merged. A3:F3 contains label/value pairs.
+  const schoolName = clean(firstValue('A2','B2','C2','D2','E2','F2'), 'School Name');
+  set('location', clean(firstValue('B3','A3'), 'LOCATION'));
+  set('vintage', clean(firstValue('C3','D3'), 'VINTAGE'));
+  set('books', clean(firstValue('D3','E3'), 'BOOKS'));
+  set('category', clean(firstValue('E3','F3'), 'CATEGORY'));
 
-  // Contacts are merged cells D6:F8 in the supplied template.
-  for (const [row, key, phoneKey] of [[6,'correspondent','correspondentPhone'],[7,'principal','principalPhone'],[8,'keyPerson','keyPersonPhone']]) {
-    const raw = first(`D${row}`, `B${row}`, `A${row}`);
+  // Contacts: D6:F8 is one merged block per row in the template.
+  for (const [row, key, phoneKey] of [
+    [6,'correspondent','correspondentPhone'],
+    [7,'principal','principalPhone'],
+    [8,'keyPerson','keyPersonPhone'],
+  ]) {
+    const raw = firstValue(`D${row}`, `E${row}`, `F${row}`, `B${row}`, `C${row}`);
     const c = splitContact(raw);
     set(`contacts.${key}`, c.name);
     set(`contacts.${phoneKey}`, c.phone);
   }
 
-  // Books & Payment: labels are in column A/C and values in adjacent cells.
-  const bookMap = {
-    B11:'booksPayment.lkg', B12:'booksPayment.ukg', B13:'booksPayment.discount',
-    B14:'booksPayment.spInvoiceValue2526', D14:'booksPayment.spInvoiceValueAdditionalOrders',
-    B15:'booksPayment.amountReceived', D15:'booksPayment.amountReceivedDate',
-    B16:'booksPayment.amountPending', D16:'booksPayment.status', E16:'booksPayment.remarks'
-  };
-  Object.entries(bookMap).forEach(([ref,path]) => {
-    const value = /Date$/i.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref);
-    set(path, value);
-  });
+  // Books & Payment. The four columns are meaningful and must stay separate:
+  // B=initial count, C=additional orders, D=returns, E=remarks.
+  const rows = [
+    [11,'lkg'], [12,'ukg'], [13,'discount'],
+  ];
+  for (const [row, key] of rows) {
+    set(`booksPayment.${key}`, read(`B${row}`));
+    set(`booksPayment.${key}AdditionalOrders`, read(`C${row}`));
+    set(`booksPayment.${key}Returns`, read(`D${row}`));
+    set(`booksPayment.${key}Remarks`, read(`E${row}`));
+  }
+  set('booksPayment.spInvoiceValue2526', read('B14'));
+  set('booksPayment.spInvoiceValueAdditionalOrders', read('C14'));
+  set('booksPayment.amountReceived', read('B15'));
+  set('booksPayment.amountReceivedDate', read('C15', true));
+  set('booksPayment.amountPending', read('B16'));
+  set('booksPayment.status', read('C16'));
+  set('booksPayment.remarks', read('E14') || read('E16'));
 
-  // Deliverables 1/3 use count + date columns. The existing application keeps
-  // the primary entry as the count/status value; populated copies therefore
-  // import the meaningful value without losing the rest of the history form.
-  const map = {
-    B19:'deliverables1.teachersCopy', B20:'deliverables1.teachersManual1',
-    B21:'deliverables1.teachersManual2', B22:'deliverables1.flashCards',
-    B24:'deliverables2.whatsapp',
-    B26:'deliverables2.windowsApp.appVersion', C26:'deliverables2.windowsApp.date',
-    D26:'deliverables2.windowsApp.lkg', E26:'deliverables2.windowsApp.ukg', F26:'deliverables2.windowsApp.systemTvBoth',
-    B27:'deliverables2.kidsApp.appVersion', C27:'deliverables2.kidsApp.date',
-    D27:'deliverables2.kidsApp.lkg', E27:'deliverables2.kidsApp.ukg', F27:'deliverables2.kidsApp.systemTvBoth',
-    B28:'deliverables2.appComments',
-    B30:'deliverables3.questionPaper', B31:'deliverables3.progressCard',
-    B33:'services.t1', B38:'services.t2', B39:'services.generalVisit', B40:'services.atu2',
-    B41:'services.atu2Comments', B42:'services.sim2', B43:'services.sim2Comments',
-    B44:'services.t3', B45:'services.sim3', B46:'services.sim3Comments',
-    B47:'currentStatus', B48:'comments'
-  };
-  Object.entries(map).forEach(([ref,path]) => {
-    const value = /\.date$/i.test(path) ? excelDateText(excelText(cells,ref)) : excelText(cells,ref);
-    set(path, value);
-  });
+  // Deliverables 1: B=count and C=date. Never concatenate the two cells.
+  for (const [row,key] of [[19,'teachersCopy'],[20,'teachersManual1'],[21,'teachersManual2'],[22,'flashCards']]) {
+    set(`deliverables1.${key}`, read(`B${row}`));
+    set(`deliverables1.${key}Date`, read(`C${row}`, true));
+  }
+
+  // Deliverables 2: WhatsApp uses B=count/C=date. Apps use the explicit header
+  // columns in row 25 and rows 26/27 for Windows/Kids.
+  set('deliverables2.whatsapp', read('B24'));
+  set('deliverables2.whatsappDate', read('C24', true));
+  for (const [row,key] of [[26,'windowsApp'],[27,'kidsApp']]) {
+    set(`deliverables2.${key}.appVersion`, read(`B${row}`));
+    set(`deliverables2.${key}.date`, read(`C${row}`, true));
+    set(`deliverables2.${key}.lkg`, read(`D${row}`));
+    set(`deliverables2.${key}.ukg`, read(`E${row}`));
+    set(`deliverables2.${key}.systemTvBoth`, read(`F${row}`));
+  }
+  set('deliverables2.appComments', read('B28'));
+
+  // Deliverables 3: B=count, C=date. D:F are merged comments in the supplied sheet.
+  for (const [row,key] of [[30,'questionPaper'],[31,'progressCard']]) {
+    set(`deliverables3.${key}`, read(`B${row}`));
+    set(`deliverables3.${key}Date`, read(`C${row}`, true));
+  }
+
+  // Services: B is the date column in the template; comment rows are merged B:F.
+  const serviceRows = [
+    [33,'t1',true], [38,'t2',true], [39,'generalVisit',true], [40,'atu2',true],
+    [41,'atu2Comments',false], [42,'sim2',true], [43,'sim2Comments',false],
+    [44,'t3',true], [45,'sim3',true], [46,'sim3Comments',false],
+  ];
+  for (const [row,key,isDate] of serviceRows) set(`services.${key}`, read(`B${row}`, isDate));
+  set('currentStatus', read('B47'));
+  set('comments', read('B48'));
   return { out, schoolName };
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved }) {
