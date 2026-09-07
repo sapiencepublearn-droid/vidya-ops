@@ -16,7 +16,7 @@ export const config = (() => {
   const cfg = {
     env,
     isProd: env === 'production',
-    port: Number(process.env.PORT || 3000),
+    port: Number(process.env.PORT || 10000),
     databaseUrl: required('DATABASE_URL'),
     jwtSecret: required('JWT_SECRET', { min: 32 }),
     fileSecret: process.env.FILE_SECRET || required('JWT_SECRET', { min: 32 }),

@@ -91,6 +91,9 @@ export function createApp({ limits: over = {} } = {}) {
   app.get('/health', async (_req, res) => {
     try {
       const h = await fullHealth();
+      if (app.locals.ready === false) {
+        return res.status(503).json({ status: 'starting', checks: h.checks, version: APP_VERSION });
+      }
       res.status(h.status === 'down' ? 503 : 200).json({
         status: h.status,
         checks: h.checks,
@@ -134,6 +137,12 @@ export function createApp({ limits: over = {} } = {}) {
   app.use('/api/lat/attempts', limit(60_000, L.lat, 'Too many attempts. Wait a moment and try again.'));
   app.use('/api/admin/broadcasts', limit(60_000, L.broadcast, 'Too many announcements at once.'));
 
+  app.use('/api', (req, res, next) => {
+    if (app.locals.ready === false) {
+      return res.status(503).json({ error: 'starting', message: 'Service is starting. Please retry shortly.', requestId: req.id });
+    }
+    next();
+  });
   app.use('/api', router);
 
   // Serve the built frontend from the same process, so one Render service
@@ -223,10 +232,28 @@ async function migrateOnBoot() {
 }
 
 export async function start() {
-  await migrateOnBoot();
-  await dbHealth(); // fail fast if the database is unreachable at boot
+  // Bind the public port immediately. Render's deploy scanner must be able to
+  // see a listener even while migrations/database readiness checks are running.
+  // Startup work must never happen before app.listen().
   const app = createApp();
-  const server = app.listen(config.port, () => logger.info({ port: config.port, env: config.env }, 'listening'));
+  app.locals.ready = false;
+
+  const server = app.listen(config.port, '0.0.0.0', () =>
+    logger.info({ port: config.port, host: '0.0.0.0', env: config.env }, 'listening'));
+
+  // Complete migrations/database readiness after the listener exists. This
+  // prevents Render's port-scan timeout from hiding the actual boot error.
+  try {
+    await migrateOnBoot();
+    await dbHealth();
+    app.locals.ready = true;
+    logger.info('application ready');
+  } catch (err) {
+    logger.error({ err }, 'application startup failed');
+    server.close(() => process.exit(1));
+    setTimeout(() => process.exit(1), 10_000).unref();
+    return server;
+  }
 
   // Small in-process scheduler for the team's fixed 09:00/18:00 IST reminders.
   // The DB run table makes each reminder idempotent across restarts.
