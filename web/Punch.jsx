@@ -111,8 +111,11 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
       const out = await api.endDay({ completedTaskIds: selectedTaskIds, ...fix }, endDayActionKey.current);
       endDayActionKey.current = null;
       onTasksDone?.();
-      setResult({ mode: 'out', ...out });
+      // End Day closes only the current session. Clear the transient result
+      // after the attendance refresh so a second Punch In is available later
+      // on the same business day.
       await onDone();
+      setResult(null);
     } catch (e) {
       setProblem({ ...e, code: e.code, status: e.status, mode: 'out' });
       // The server performs task updates and punch-out atomically, so a failed

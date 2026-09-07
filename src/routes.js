@@ -430,6 +430,12 @@ router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, re
   if (!site) throw forbidden('That school is not assigned to you today.', 'school_not_assigned');
   const { distance } = verifyFix([site], f);
   const row = await tx(req.user, async (c) => {
+    const activeAttendance = (await c.query(
+      `SELECT attendance_id FROM attendance
+        WHERE employee_id=$1 AND work_date=ist_today()
+          AND check_in_time IS NOT NULL AND check_out_time IS NULL
+        LIMIT 1 FOR UPDATE`, [req.user.id])).rows[0];
+    if (!activeAttendance) throw conflict('Please Punch In before starting a school visit.', 'not_checked_in');
     const open = (await c.query(
       `SELECT visit_id FROM school_visits WHERE employee_id=$1 AND work_date=ist_today() AND check_in_time IS NOT NULL AND check_out_time IS NULL LIMIT 1`,
       [req.user.id])).rows[0];
@@ -572,7 +578,8 @@ router.get('/schools', wrap(async (req, res) => {
 router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT location_id, name, zone, address, contact_person, contact_designation, contact_phone,
-            latitude, longitude, radius_metres, is_active, location_set_at, created_at, updated_at
+            latitude, longitude, radius_metres, is_active, location_set_at, created_at, updated_at,
+            school_history
        FROM locations WHERE location_id = $1 AND kind = 'school'`, [req.params.id]);
   if (!rows[0]) throw notFound('That school does not exist.');
 
@@ -970,7 +977,7 @@ async function recordTaskDailyLog(c, employeeId, todayTasks, selectedTaskIds) {
 router.get('/tasks/me', wrap(async (req, res) => {
   const { limit, offset } = page(req.query);
   const views = {
-    today: `t.due_date <= ist_today() AND t.status <> 'Completed'`,
+    today: `t.due_date <= ist_today()`,
     upcoming: `t.due_date > ist_today()`,
     completed: `t.status = 'Completed'`,
     overdue: `t.effective_status = 'Overdue'`,
@@ -1022,8 +1029,8 @@ router.post('/attendance/end-day', idempotent(wrap(async (req, res) => {
     const todayTasks = (await c.query(
       `SELECT task_id, status
          FROM tasks
-        WHERE assigned_to=$1 AND due_date=ist_today() AND deleted_at IS NULL
-        ORDER BY due_time, created_at`, [req.user.id])).rows;
+        WHERE assigned_to=$1 AND due_date <= ist_today() AND deleted_at IS NULL
+        ORDER BY due_date, due_time, created_at`, [req.user.id])).rows;
     const allowed = new Set(todayTasks.map((t) => t.task_id));
     const selected = f.completedTaskIds.filter((id) => allowed.has(id));
     if (selected.length) {
@@ -1031,7 +1038,7 @@ router.post('/attendance/end-day', idempotent(wrap(async (req, res) => {
         `UPDATE tasks
             SET status='Completed', completed_at=COALESCE(completed_at, now()), updated_at=now()
           WHERE task_id = ANY($1::uuid[]) AND assigned_to=$2
-            AND due_date=ist_today() AND deleted_at IS NULL`,
+            AND due_date <= ist_today() AND deleted_at IS NULL`,
         [selected, req.user.id]);
     }
 
@@ -1821,8 +1828,12 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
 
     const hoursBetween = (a, b) => a && b ? Math.max(0, (new Date(b) - new Date(a)) / 3600000) : 0;
     const round2 = (n) => Math.round(n * 100) / 100;
-    const attendanceDays = new Set(attendance.filter((a) => a.check_in_time).map((a) => String(a.work_date).slice(0,10))).size;
-    const completedAttendance = attendance.filter((a) => a.check_in_time && a.check_out_time);
+    const attendanceWithIn = attendance.filter((a) => a.check_in_time);
+    const completedAttendance = attendanceWithIn.filter((a) => a.check_out_time);
+    const attendanceDays = new Set(attendanceWithIn.map((a) => String(a.work_date).slice(0,10))).size;
+    const completedDays = new Set(completedAttendance.map((a) => String(a.work_date).slice(0,10))).size;
+    const lateDays = new Set(attendance.filter((a) => a.status === 'Late').map((a) => String(a.work_date).slice(0,10))).size;
+    const fieldDays = new Set(attendance.filter((a) => a.status === 'Field Work').map((a) => String(a.work_date).slice(0,10))).size;
     const totalHours = round2(completedAttendance.reduce((sum, a) => sum + hoursBetween(a.check_in_time, a.check_out_time), 0));
     const visitHours = round2(schoolVisits.reduce((sum, v) => sum + hoursBetween(v.check_in_time, v.check_out_time), 0));
     const claimsTotal = claims.reduce((sum, c) => sum + Number(c.amount_paise || 0), 0);
@@ -1834,9 +1845,9 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
       range: { from, to },
       summary: {
         attendanceDays,
-        completedDays: completedAttendance.length,
-        lateDays: attendance.filter((a) => a.status === 'Late').length,
-        fieldDays: attendance.filter((a) => a.status === 'Field Work').length,
+        completedDays,
+        lateDays,
+        fieldDays,
         totalHours,
         schoolVisits: schoolVisits.length,
         visitHours,

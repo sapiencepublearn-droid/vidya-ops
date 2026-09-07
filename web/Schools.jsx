@@ -237,7 +237,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
         </div>
       )}
 
-      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} />
+      <SchoolHistoryCard T={T} api={api} school={s} editing={historyEditing} setEditing={setHistoryEditing} M={M} Btn={Btn} />
 
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
@@ -380,7 +380,7 @@ const historySections = [
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
 function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
 
-function SchoolHistoryCard({ T, api, school, editing, setEditing }) {
+function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null);
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);

@@ -56,7 +56,7 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   useEffect(() => {
     if (!holder.current || map.current) return;
     map.current = L.map(holder.current, { center: INDIA_CENTRE, zoom: 4, minZoom: 3 });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap contributors',
       // Required by OSM's tile usage policy: a Referer must reach their
@@ -275,7 +275,7 @@ export function EvidenceMap({ T, latitude, longitude, accuracy, label }) {
     map.current = L.map(holder.current, {
       center: [lat, lng], zoom: 16, zoomControl: false, scrollWheelZoom: false,
     });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; OpenStreetMap',
       crossOrigin: true,
       referrerPolicy: 'strict-origin-when-cross-origin',
