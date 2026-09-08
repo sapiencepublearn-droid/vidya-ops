@@ -157,10 +157,19 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
         width: '100%', maxWidth: 760, background: T.bg, borderRadius: isPhone ? '16px 16px 0 0' : 16,
         border: `1px solid ${T.line}`, maxHeight: '94vh', overflowY: 'auto', padding: isPhone ? 20 : 28,
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-          <div className="tight" style={{ fontSize: 18, fontWeight: 600 }}>School Map</div>
-          <button className="press" onClick={onClose}
-            style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
+        <div style={{
+          position: 'sticky', top: 0, zIndex: 5, background: T.bg,
+          display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center',
+          gap: 10, padding: isPhone ? '12px 0' : '0 0 14px',
+          marginBottom: 6, borderBottom: isPhone ? `1px solid ${T.line}` : 'none',
+        }}>
+          <button className="press" onClick={onClose} aria-label="Back to schools"
+            style={{ justifySelf: 'start', background: 'none', border: 'none', color: T.text, cursor: 'pointer', fontSize: 13, padding: '7px 0', fontWeight: 500 }}>
+            ← Back
+          </button>
+          <div className="tight" style={{ fontSize: 17, fontWeight: 600, whiteSpace: 'nowrap' }}>School Map</div>
+          <button className="press" onClick={onClose} aria-label="Close school map"
+            style={{ justifySelf: 'end', width: 32, height: 32, borderRadius: 8, background: 'none', border: `1px solid ${T.line}`, color: T.faint, cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>×</button>
         </div>
         <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
           {plotted.length} of {(schools || []).length} schools have a confirmed position.
