@@ -118,7 +118,7 @@ test('a valid claim is stored in the database', async () => {
   const token = await tokenFor('alice@x.in');
   const r = await api('/api/claims', {
     method: 'POST', token,
-    body: { date: await today(), category: 'Food', amount: 240, attachmentId: await bill(token) },
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 240, attachmentId: await bill(token) },
   });
   assert.equal(r.status, 201);
   assert.equal(r.body.amount_paise, '24000', 'money is stored as integer paise');
@@ -130,7 +130,7 @@ test('SECURITY: a claim over the daily food cap is refused by the API', async ()
   const token = await tokenFor('alice@x.in');
   const r = await api('/api/claims', {
     method: 'POST', token,
-    body: { date: await today(), category: 'Food', amount: 600, attachmentId: await bill(token) },
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 600, attachmentId: await bill(token) },
   });
   assert.equal(r.status, 422);
   assert.equal(r.body.error, 'daily_limit_exceeded');
@@ -143,10 +143,10 @@ test('the cap is a daily total, not a per-bill limit', async () => {
   const token = await tokenFor('alice@x.in');
   const d = await today();
   const first = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Food', amount: 300, attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Food', amount: 300, attachmentId: await bill(token) } });
   assert.equal(first.status, 201);
   const second = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Food', amount: 300, attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Food', amount: 300, attachmentId: await bill(token) } });
   assert.equal(second.status, 422, 'two 300 claims must not both pass a 500 cap');
   assert.equal(second.body.details.remaining, 200);
 });
@@ -157,7 +157,7 @@ test('RACE: parallel claims cannot together exceed the daily cap', async () => {
   const bills = await Promise.all([bill(token), bill(token), bill(token), bill(token)]);
   // Four simultaneous 200 claims against a 500 cap: at most two may land.
   const results = await Promise.all(bills.map((att) =>
-    api('/api/claims', { method: 'POST', token, body: { date: d, category: 'Food', amount: 200, attachmentId: att } })));
+    api('/api/claims', { method: 'POST', token, body: { date: d, expenseType: 'Local', category: 'Food', amount: 200, attachmentId: att } })));
 
   assert.equal(results.filter((r) => r.status >= 500).length, 0, 'no 500s under contention');
   const { rows } = await pool.query(
@@ -171,10 +171,10 @@ test('stay cap is enforced separately at 1500', async () => {
   const token = await tokenFor('alice@x.in');
   const d = await today();
   const ok = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Stay', amount: 1450, location: 'Vellore', attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Stay', amount: 1450, location: 'Vellore', attachmentId: await bill(token) } });
   assert.equal(ok.status, 201);
   const over = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Stay', amount: 100, location: 'Vellore', attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Stay', amount: 100, location: 'Vellore', attachmentId: await bill(token) } });
   assert.equal(over.status, 422);
   assert.match(over.body.message, /Max limit crossed/);
 });
@@ -183,17 +183,17 @@ test('travel is uncapped but requires a place', async () => {
   const token = await tokenFor('alice@x.in');
   const d = await today();
   const noPlace = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Travel', amount: 5000, attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Travel', amount: 5000, attachmentId: await bill(token) } });
   assert.equal(noPlace.status, 422, 'travel without a place must fail the check constraint');
   const ok = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Travel', amount: 5000, place: 'Office to ABC School', attachmentId: await bill(token) } });
+    body: { date: d, expenseType: 'Local', category: 'Travel', amount: 5000, place: 'Office to ABC School', attachmentId: await bill(token) } });
   assert.equal(ok.status, 201);
 });
 
 test('claims are refused when reimbursement is not enabled on the account', async () => {
   const token = await tokenFor('bob@x.in');
   const r = await api('/api/claims', { method: 'POST', token,
-    body: { date: await today(), category: 'Food', amount: 100, attachmentId: await bill(token) } });
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 100, attachmentId: await bill(token) } });
   assert.equal(r.status, 403);
 });
 
@@ -202,7 +202,7 @@ test('negative, zero and absurd amounts are refused', async () => {
   const d = await today();
   for (const amount of [-100, 0, 999999999]) {
     const r = await api('/api/claims', { method: 'POST', token,
-      body: { date: d, category: 'Food', amount, attachmentId: await bill(token) } });
+      body: { date: d, expenseType: 'Local', category: 'Food', amount, attachmentId: await bill(token) } });
     assert.equal(r.status, 422, `amount ${amount} must be refused`);
   }
 });
@@ -210,7 +210,7 @@ test('negative, zero and absurd amounts are refused', async () => {
 test('an employee cannot read another employee claim', async () => {
   const aliceT = await tokenFor('alice@x.in');
   const claim = await api('/api/claims', { method: 'POST', token: aliceT,
-    body: { date: await today(), category: 'Food', amount: 100, attachmentId: await bill(aliceT) } });
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 100, attachmentId: await bill(aliceT) } });
   const bobT = await tokenFor('bob@x.in');
   const r = await api(`/api/claims/${claim.body.claim_id}`, { token: bobT });
   assert.equal(r.status, 404, 'must not confirm the record exists');
@@ -219,7 +219,7 @@ test('an employee cannot read another employee claim', async () => {
 test('admin can approve and the decision is recorded once', async () => {
   const aliceT = await tokenFor('alice@x.in');
   const claim = (await api('/api/claims', { method: 'POST', token: aliceT,
-    body: { date: await today(), category: 'Food', amount: 100, attachmentId: await bill(aliceT) } })).body;
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 100, attachmentId: await bill(aliceT) } })).body;
   const adminT = await tokenFor('boss@x.in');
   const ok = await api(`/api/admin/claims/${claim.claim_id}/decide`, {
     method: 'POST', token: adminT, body: { decision: 'Approved' } });
@@ -232,7 +232,7 @@ test('admin can approve and the decision is recorded once', async () => {
 test('rejection without a reason is refused', async () => {
   const aliceT = await tokenFor('alice@x.in');
   const claim = (await api('/api/claims', { method: 'POST', token: aliceT,
-    body: { date: await today(), category: 'Food', amount: 100, attachmentId: await bill(aliceT) } })).body;
+    body: { date: await today(), expenseType: 'Local', category: 'Food', amount: 100, attachmentId: await bill(aliceT) } })).body;
   const adminT = await tokenFor('boss@x.in');
   const r = await api(`/api/admin/claims/${claim.claim_id}/decide`, {
     method: 'POST', token: adminT, body: { decision: 'Rejected' } });
@@ -298,10 +298,10 @@ test('an attachment cannot be attached to two claims', async () => {
   const d = await today();
   const att = await bill(token);
   const first = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Food', amount: 100, attachmentId: att } });
+    body: { date: d, expenseType: 'Local', category: 'Food', amount: 100, attachmentId: att } });
   assert.equal(first.status, 201);
   const second = await api('/api/claims', { method: 'POST', token,
-    body: { date: d, category: 'Food', amount: 100, attachmentId: att } });
+    body: { date: d, expenseType: 'Local', category: 'Food', amount: 100, attachmentId: att } });
   assert.equal(second.status, 403, 'a reused bill must be refused');
 });
 

@@ -175,9 +175,13 @@ function validateOpenFix(fix) {
   }
   return fix;
 }
-// Trainers and Technical Support may punch from anywhere. Their GPS is still
-// recorded as evidence, but low accuracy must not turn an anywhere punch into
-// a geofence failure. School visit check-in/out continues to require accurate GPS.
+// Field punch validation for exactly two roles: Trainer and Technical Support.
+// What still applies: fixSchema has already validated the GPS shape, and this
+// function rejects mock-location signals. What intentionally does NOT apply
+// here: maxAccuracyMetres and office/school geofence matching. The caller still
+// records the GPS evidence, but check-in/check-out/end-day are accepted anywhere.
+// School visit check-in/out is separate and continues to use validateOpenFix plus
+// permittedSites/verifyFix, so the school gate still requires an accurate fix.
 function validateFieldFix(fix) {
   if (fix.isMocked) {
     throw unprocessable('This device is reporting a mock location. Turn off the mock location app and try again.', 'mock_location');

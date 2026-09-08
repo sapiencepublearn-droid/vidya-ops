@@ -36,7 +36,7 @@ test('a repeated claim with the same key files only one claim', async () => {
   const token = await tokenFor('alice@x.in');
   const bill = (await uploadFile(token, 'b.pdf', PDF)).body.attachment_id;
   const today = (await db.query('SELECT ist_today() AS d')).rows[0].d.toISOString().slice(0, 10);
-  const body = { date: today, category: 'Food', amount: 200, attachmentId: bill };
+  const body = { date: today, expenseType: 'Local', category: 'Food', amount: 200, attachmentId: bill };
   const k = key();
 
   const first = await api('/api/claims', { method: 'POST', token, body, idempotencyKey: k });
@@ -58,11 +58,11 @@ test('the same key with a different body is refused, not silently replayed', asy
   const b2 = (await uploadFile(token, 'b.pdf', PDF)).body.attachment_id;
 
   const first = await api('/api/claims', { method: 'POST', token,
-    body: { date: today, category: 'Food', amount: 100, attachmentId: b1 }, idempotencyKey: k });
+    body: { date: today, expenseType: 'Local', category: 'Food', amount: 100, attachmentId: b1 }, idempotencyKey: k });
   assert.equal(first.status, 201);
 
   const different = await api('/api/claims', { method: 'POST', token,
-    body: { date: today, category: 'Food', amount: 300, attachmentId: b2 }, idempotencyKey: k });
+    body: { date: today, expenseType: 'Local', category: 'Food', amount: 300, attachmentId: b2 }, idempotencyKey: k });
   assert.equal(different.status, 422);
   assert.equal(different.body.error, 'idempotency_key_reused');
 });

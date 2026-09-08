@@ -99,6 +99,7 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
   if (detail.error) return <>{back}<ErrorBlock error={detail.error} onRetry={detail.reload} /></>;
 
   const s = detail.data;
+  if (!s) return <>{back}<ErrorBlock error={new Error('School details are empty. Please reload the school record.')} onRetry={detail.reload} /></>;
   const maps = googleMapsUrl(s);
   return (
     <div>
@@ -299,6 +300,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   if (detail.error) return <>{back}<ErrorBlock error={detail.error} onRetry={detail.reload} /></>;
 
   const s = detail.data;
+  if (!s) return <>{back}<ErrorBlock error={new Error('School details are empty. Please reload the school record.')} onRetry={detail.reload} /></>;
   const assignedIds = new Set((s.assignedEmployees || []).map((e) => e.employee_id));
   const unassigned = (team.data || []).filter((e) => !assignedIds.has(e.employee_id) && !e.is_admin);
   const label = { fontSize: 11, textTransform: 'uppercase', letterSpacing: '.12em', color: T.faint, marginBottom: 6 };
@@ -811,7 +813,7 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const [problem, setProblem] = useState(null);
   const [resolvingMaps, setResolvingMaps] = useState(false);
   const [manualLocation, setManualLocation] = useState(false);
-  const [mapsUrl, setMapsUrl] = useState(() => (school?.latitude !== null && school?.longitude !== null) ? `https://www.google.com/maps/search/?api=1&query=${school.latitude},${school.longitude}` : '');
+  const [mapsUrl, setMapsUrl] = useState(() => (school?.latitude != null && school?.longitude != null) ? `https://www.google.com/maps/search/?api=1&query=${school.latitude},${school.longitude}` : '');
   const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
   const applyMapsLocation = async (value) => {
     const raw = String(value || '').trim();

@@ -57,14 +57,14 @@ test('JOURNEY: employee logs in, checks in, works a task, claims, logs out', asy
   // 6. claim with a bill, inside the cap
   const bill = new Blob([Buffer.from('%PDF-1.4\n' + ' '.repeat(300))], { type: 'application/pdf' });
   const uploaded = await employee.uploadFile(new File([bill], 'lunch.pdf'));
-  const claim = await employee.createClaim({ date: d, category: 'Food', amount: 240, attachmentId: uploaded.attachment_id });
+  const claim = await employee.createClaim({ date: d, expenseType: 'Local', category: 'Food', amount: 240, attachmentId: uploaded.attachment_id });
   assert.equal(claim.status, 'Pending');
 
   // 7. the cap is refused by the server, with a usable message
   const bill2 = new File([bill], 'dinner.pdf');
   const up2 = await employee.uploadFile(bill2);
   await assert.rejects(
-    () => employee.createClaim({ date: d, category: 'Food', amount: 400, attachmentId: up2.attachment_id }),
+    () => employee.createClaim({ date: d, expenseType: 'Local', category: 'Food', amount: 400, attachmentId: up2.attachment_id }),
     (e) => e instanceof ApiError && e.status === 422 && e.code === 'daily_limit_exceeded'
         && /Max limit reached for the day/.test(e.message));
 
