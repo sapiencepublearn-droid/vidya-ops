@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, createContext, useContext, use
 import { createClient, ApiError, readFix, newActionKey } from './api-client.js';
 import { LatCard, LatScreen, AdminLat } from './Lat.jsx';
 import { BroadcastCard, BroadcastList, AdminBroadcasts } from './Broadcast.jsx';
-import { AdminSchools } from './Schools.jsx';
+import { AdminSchools, EmployeeSchools } from './Schools.jsx';
 import { PunchPanel } from './Punch.jsx';
 
 /* ═══════════════════════════════════════════════════════════════ tokens */
@@ -261,9 +261,14 @@ function Styles({ T }) {
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
       *{font-family:Inter,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;box-sizing:border-box}
-      html,body{margin:0;overflow-x:hidden;max-width:100%}
-      #root{overflow-x:hidden}
+      html,body{margin:0;overflow-x:hidden;max-width:100%;width:100%}
+      #root{overflow-x:hidden;max-width:100%;min-height:100%}
       img,svg{max-width:100%}
+      button,input,select,textarea{max-width:100%;box-sizing:border-box}
+      @media (max-width:767px){
+        body{-webkit-text-size-adjust:100%}
+        input,select,textarea,button{font-size:16px}
+      }
       .mono{font-family:"JetBrains Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
       .tight{letter-spacing:-.035em}
       input:focus,textarea:focus,select:focus{border-color:${T.text}!important}
@@ -406,7 +411,7 @@ function Employee({ me, onOut, theme, setTheme }) {
   useEffect(() => { const id = setInterval(() => notifications.reload(), 60000); return () => clearInterval(id); }, [notifications.reload]);
 
   const nav = [
-    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
+    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['lat', 'LAT'],
     ['contributions', 'Contributions'], ['workdone', 'Work Done'],
     ...(profile.data?.claims_enabled ? [['claims', 'Claims']] : []),
     ['profile', 'Profile'],
@@ -414,6 +419,14 @@ function Employee({ me, onOut, theme, setTheme }) {
 
   const selectTab = (k) => {
     setOpenTask(null); setLatOpen(false); setNewsOpen(false); setTab(k); setSidebarOpen(false);
+  };
+
+  const employeeSubView = Boolean(openTask || latOpen || newsOpen);
+  const firstName = String(me?.name || 'there').trim().split(/\s+/)[0] || 'there';
+  const closeEmployeeSubView = () => {
+    setOpenTask(null);
+    setLatOpen(false);
+    setNewsOpen(false);
   };
 
   const content = (
@@ -425,6 +438,8 @@ function Employee({ me, onOut, theme, setTheme }) {
             onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
           : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
             : tab === 'attendance' ? <EAttendance profile={profile} />
+              : tab === 'schools' ? <EmployeeSchools T={T} api={api} isPhone={isPhone} useResource={useResource}
+                  Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} Blank={Blank} M={M} />
               : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
                 : tab === 'claims' ? <EClaims profile={profile} />
                 : tab === 'contributions' ? <EContributions />
@@ -436,14 +451,32 @@ function Employee({ me, onOut, theme, setTheme }) {
   return (
     <div style={{ minHeight: '100vh', background: T.bg, color: T.text }}>
       <header style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '14px 20px', borderBottom: `1px solid ${T.line}`,
+        display: 'grid', gridTemplateColumns: '44px 1fr auto', alignItems: 'center',
+        padding: '10px 16px', minHeight: 56, borderBottom: `1px solid ${T.line}`,
         position: 'sticky', top: 0, background: T.bg, zIndex: 20,
       }}>
-        <button className="press" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"
-          style={{ background: 'none', border: 'none', color: T.text, fontSize: 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>☰</button>
-        <Brand size={22} showName={false} />
-        <div style={{display:'flex',alignItems:'center',gap:10}}><NotificationBell T={T} notifications={notifications} /><ThemeToggle theme={theme} setTheme={setTheme} /></div>
+        <button className="press"
+          onClick={employeeSubView ? closeEmployeeSubView : () => setSidebarOpen(true)}
+          aria-label={employeeSubView ? 'Go back' : 'Open navigation'}
+          style={{ background: 'none', border: 'none', color: T.text, fontSize: employeeSubView ? 25 : 22, cursor: 'pointer', padding: 4, lineHeight: 1 }}>
+          {employeeSubView ? '←' : '☰'}
+        </button>
+
+        <div style={{ display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Brand size={22} showName={false} />
+            {tab === 'home' && !employeeSubView && (
+              <span style={{ fontSize: 13, fontWeight: 500, color: T.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '42vw' }}>
+                Hey, {firstName}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <NotificationBell T={T} notifications={notifications} />
+          <ThemeToggle theme={theme} setTheme={setTheme} />
+        </div>
       </header>
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 57px)' }}>

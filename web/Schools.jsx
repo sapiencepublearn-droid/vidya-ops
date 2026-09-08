@@ -1,12 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { newActionKey } from './api-client.js';
-import { SchoolMap, EvidenceMap, directionsUrl, googleMapsUrl } from './SchoolMap.jsx';
+import { SchoolMap, EvidenceMap, googleMapsUrl } from './SchoolMap.jsx';
 
 /**
  * Schools — the places trainers visit.
  *
- * Admin only. Employees never see these controls, and the server refuses
- * them regardless of what the interface offers.
+ * The school directory is readable by every signed-in employee. Editing,
+ * assignment, history changes, and other admin controls remain admin-only.
  *
  * Sized for roughly 140 schools: a search box and a zone filter over a
  * plain list. No map, no clustering, no virtualised grid.
@@ -16,6 +16,126 @@ const istDate = (d) => d ? new Date(d).toLocaleDateString('en-IN',
   { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }) : '—';
 const istTime = (t) => t ? new Date(t).toLocaleTimeString('en-IN',
   { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }) : '—';
+
+
+/** Read-only school directory for trainers and other employees. */
+export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+  const [mapOpen, setMapOpen] = useState(false);
+  const schools = useResource(() => api.schools('?active=true'), []);
+  const list = schools.data || [];
+
+  const filtered = list.filter((s) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return String(s.name || '').toLowerCase().includes(needle)
+      || String(s.zone || '').toLowerCase().includes(needle)
+      || String(s.address || '').toLowerCase().includes(needle);
+  });
+
+  if (open) {
+    return <EmployeeSchoolDetail T={T} api={api} id={open} isPhone={isPhone}
+      onBack={() => { setOpen(null); schools.reload(); }} useResource={useResource}
+      Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} M={M} />;
+  }
+
+  const input = {
+    padding: '10px 12px', borderRadius: 8, fontSize: 14, background: 'transparent',
+    border: `1px solid ${T.line}`, color: T.text, outline: 'none', width: '100%',
+  };
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 20 }}>
+        <div>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
+          <div style={{ fontSize: 12, color: T.mute, marginTop: 5 }}>Find your school and its location.</div>
+        </div>
+        <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
+      </div>
+
+      <input value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder="Search school, zone or address" style={{ ...input, marginBottom: 18 }} />
+
+      {schools.loading ? <Rows n={6} />
+        : schools.error ? <ErrorBlock error={schools.error} onRetry={schools.reload} />
+        : !filtered.length ? <Blank title={list.length ? 'No schools match your search' : 'No schools available'} />
+        : (
+          <div style={{ borderTop: `1px solid ${T.line}` }}>
+            {filtered.map((s) => (
+              <button key={s.location_id} className="row press" onClick={() => setOpen(s.location_id)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '15px 0', background: 'none', border: 'none', borderBottom: `1px solid ${T.line}`, cursor: 'pointer', color: T.text }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                    <div style={{ fontSize: 12, color: T.mute, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.zone}{s.address ? ` · ${s.address}` : ''}
+                    </div>
+                  </div>
+                  <span style={{ color: T.faint, fontSize: 18 }}>›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+      {mapOpen && <SchoolMap T={T} schools={list} isPhone={isPhone}
+        onViewDetails={(id) => { setMapOpen(false); setOpen(id); }}
+        onClose={() => setMapOpen(false)} />}
+    </>
+  );
+}
+
+function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, ErrorBlock, Rows, M }) {
+  const detail = useResource(() => api.school(id), [id]);
+  const back = (
+    <div style={{ position: isPhone ? 'sticky' : 'static', top: isPhone ? 56 : undefined, zIndex: 10, background: T.bg, padding: '8px 0 10px', marginBottom: 16, borderBottom: `1px solid ${T.line}` }}>
+      <button className="press" onClick={onBack} aria-label="Back to schools" style={{ background: 'none', border: 'none', color: T.text, fontSize: 13, cursor: 'pointer', padding: '6px 0', fontWeight: 500 }}>← Back to Schools</button>
+    </div>
+  );
+
+  if (detail.loading) return <>{back}<Rows n={5} /></>;
+  if (detail.error) return <>{back}<ErrorBlock error={detail.error} onRetry={detail.reload} /></>;
+
+  const s = detail.data;
+  const maps = googleMapsUrl(s);
+  return (
+    <div>
+      {back}
+      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>{s.name}</h1>
+      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone}{s.is_active ? '' : ' · inactive'}</div>
+
+      <div style={{ borderTop: `1px solid ${T.line}` }}>
+        {[
+          ['Address', s.address],
+          ['Contact', s.contact_person],
+          ['Designation', s.contact_designation],
+        ].filter(([, v]) => v).map(([k, v]) => (
+          <div key={k} style={{ display: 'grid', gridTemplateColumns: isPhone ? '100px 1fr' : '140px 1fr', gap: 12, padding: '13px 0', borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+            <span style={{ color: T.mute }}>{k}</span><span style={{ overflowWrap: 'anywhere' }}>{v}</span>
+          </div>
+        ))}
+        {s.contact_phone && (
+          <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '100px 1fr' : '140px 1fr', gap: 12, padding: '13px 0', borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+            <span style={{ color: T.mute }}>Phone</span><a href={`tel:${s.contact_phone}`} style={{ color: T.text }}>{s.contact_phone}</a>
+          </div>
+        )}
+      </div>
+
+      {maps && (
+        <a className="press" href={maps} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: 20, color: T.text, fontSize: 13 }}>Open location in Google Maps ↗</a>
+      )}
+
+      {maps && (
+        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${T.line}` }}>
+          <div className="mono" style={{ fontSize: 11, color: T.faint }}>LOCATION</div>
+          <div style={{ fontSize: 13, marginTop: 6 }}>{Number(s.latitude).toFixed(6)}, {Number(s.longitude).toFixed(6)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
   const [q, setQ] = useState('');
@@ -161,10 +281,16 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   };
 
   const back = (
-    <button className="press" onClick={onBack} style={{
-      background: 'none', border: 'none', color: T.mute, fontSize: 12,
-      cursor: 'pointer', padding: 0, marginBottom: 24,
-    }}>← Schools</button>
+    <div style={{
+      position: isPhone ? 'sticky' : 'static', top: isPhone ? 56 : undefined, zIndex: isPhone ? 10 : undefined,
+      background: T.bg, padding: isPhone ? '8px 0 10px' : 0, marginBottom: 16,
+      borderBottom: isPhone ? `1px solid ${T.line}` : 'none',
+    }}>
+      <button className="press" onClick={onBack} aria-label="Back to schools" style={{
+        background: 'none', border: 'none', color: T.text, fontSize: 13,
+        cursor: 'pointer', padding: '6px 0', fontWeight: 500,
+      }}>← Back to Schools</button>
+    </div>
   );
 
   if (detail.loading) return <>{back}<Rows n={5} /></>;
@@ -225,10 +351,6 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
                   { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' })}
               </M>
             )}
-            <a className="press" href={directionsUrl(s, null)} target="_blank" rel="noopener noreferrer"
-              style={{ fontSize: 13, color: T.text, display: 'inline-block', marginTop: 10 }}>
-              Get Directions
-            </a>
           </>
         )}
       </div>
@@ -624,23 +746,49 @@ function parseGoogleMapsLocation(value) {
   if (!raw) return null;
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* keep original */ }
-  const patterns = [
-    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
-    /@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
-    /[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
-    /\/place\/\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
-    /(^|[^\d])(-?\d{1,3}\.\d{4,})\s*,\s*(-?\d{1,3}\.\d{4,})(?!\d)/,
-  ];
-  for (const re of patterns) {
-    const m = text.match(re);
-    if (!m) continue;
-    const latitude = Number(m[m.length - 2]);
-    const longitude = Number(m[m.length - 1]);
-    if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+
+  // IMPORTANT: Google Maps @lat,lng is usually the map viewport center,
+  // not the actual place pin. For a Google Maps place URL, the !3d...!4d...
+  // pair is the place coordinate and must win.
+  const place = text.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i);
+  if (place) {
+    const latitude = Number(place[1]);
+    const longitude = Number(place[2]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)
+      && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
       return { latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) };
     }
   }
+
+  // These are safe coordinate-bearing forms when they are explicitly a
+  // query/destination, rather than a map viewport.
+  const query = text.match(/[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i);
+  if (query) {
+    const latitude = Number(query[1]);
+    const longitude = Number(query[2]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)
+      && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      return { latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) };
+    }
+  }
+
+  // Do NOT use /@lat,lng/ for Google Maps links: it can be only the viewport.
+  // It is intentionally left to the server resolver, which follows short
+  // links and extracts the final place coordinate.
   return null;
+}
+
+function isGoogleMapsUrl(value) {
+  try {
+    const u = new URL(String(value || '').trim());
+    const host = u.hostname.toLowerCase();
+    return u.protocol === 'http:' || u.protocol === 'https:'
+      ? (host === 'maps.app.goo.gl' || host === 'goo.gl' || host === 'google.com'
+        || host === 'www.google.com' || host === 'maps.google.com')
+      : false;
+  } catch {
+    return false;
+  }
 }
 
 function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
@@ -666,18 +814,17 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const applyMapsLocation = async (value) => {
     const raw = String(value || '').trim();
     if (!raw) { setMapsUrl(''); set({ latitude: '', longitude: '' }); return true; }
-    const parsed = parseGoogleMapsLocation(raw);
-    if (parsed) {
-      setMapsUrl(raw);
-      setF(prev => ({ ...prev, latitude: parsed.latitude, longitude: parsed.longitude }));
-      setProblem(null);
-      return true;
-    }
-    if (!/^https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl|(?:www\.)?google\.com|maps\.google\.com)\//i.test(raw)) {
+
+    if (!isGoogleMapsUrl(raw)) {
       setProblem(new Error('Paste a Google Maps link, or enter latitude and longitude manually.'));
       return false;
     }
-    setMapsUrl(raw); setResolvingMaps(true); setProblem(null);
+
+    // Always resolve Google Maps links on the server. This is important because
+    // /@lat,lng/ can be a viewport center and can differ from the school pin.
+    setMapsUrl(raw);
+    setResolvingMaps(true);
+    setProblem(null);
     try {
       const result = await api.admin.resolveGoogleMaps(raw);
       const coords = { latitude: Number(result.latitude).toFixed(6), longitude: Number(result.longitude).toFixed(6) };
@@ -686,7 +833,9 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
     } catch (e) {
       setProblem(e);
       return false;
-    } finally { setResolvingMaps(false); }
+    } finally {
+      setResolvingMaps(false);
+    }
   };
 
   const lat = Number(f.latitude), lng = Number(f.longitude), radius = Number(f.radiusMetres);
@@ -801,14 +950,13 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
                 const value = e.target.value;
                 setMapsUrl(value);
                 if (!value.trim()) set({ latitude: '', longitude: '' });
-                else if (parseGoogleMapsLocation(value)) applyMapsLocation(value);
               }}
               onBlur={() => { if (mapsUrl.trim()) applyMapsLocation(mapsUrl); }}
               onPaste={(e) => {
                 const value = e.clipboardData?.getData('text') || '';
+                e.preventDefault();
                 setMapsUrl(value);
-                if (parseGoogleMapsLocation(value)) { e.preventDefault(); applyMapsLocation(value); }
-                else setTimeout(() => applyMapsLocation(value), 0);
+                applyMapsLocation(value);
               }}
               disabled={resolvingMaps}
               placeholder="Paste Google Maps link here"
