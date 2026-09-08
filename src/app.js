@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'node:crypto';
 import { config, logger, ApiError, dbHealth, fullHealth, pool } from './core.js';
 import { router } from './routes.js';
+import { runAttendanceReminders } from './reliability.js';
 
 // One source of truth. A hardcoded string here drifts from package.json
 // the first time either is bumped, and then /health reports a version that
@@ -30,12 +31,15 @@ export function createApp({ limits: over = {} } = {}) {
   // else: scripts, styles and connections stay locked to 'self', so a
   // compromised tile host still cannot run code or exfiltrate data.
   const tileHosts = ['https://*.tile.openstreetmap.org', 'https://tile.openstreetmap.org'];
-  app.use(helmet({
+  app.use(helmet(
+    {
     crossOriginResourcePolicy: { policy: 'same-site' },
     contentSecurityPolicy: {
       useDefaults: true,
       directives: {
         'img-src': ["'self'", 'data:', 'blob:', ...tileHosts],
+  'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+  'font-src': ["'self'", 'https://fonts.gstatic.com', 'data:'],
       },
     },
     // OpenStreetMap's tile policy (changed March 2026) requires a Referer
@@ -219,12 +223,27 @@ async function migrateOnBoot() {
 }
 
 export async function start() {
-  await migrateOnBoot();
-  await dbHealth(); // fail fast if the database is unreachable at boot
+  // Render must see an open port while migrations/database checks are running.
+  // Start listening first, then perform boot readiness work in the same process.
   const app = createApp();
-  const server = app.listen(config.port, () => logger.info({ port: config.port, env: config.env }, 'listening'));
+  const server = app.listen(config.port, '0.0.0.0', () => logger.info({ port: config.port, env: config.env }, 'listening'));
+
+  const reminderTimer = setInterval(() => runAttendanceReminders().catch((err) => logger.error({ err }, 'attendance reminder failed')), 60_000);
+
+  try {
+    await migrateOnBoot();
+    await dbHealth();
+    logger.info('application ready');
+    runAttendanceReminders().catch((err) => logger.error({ err }, 'attendance reminder failed at startup'));
+  } catch (err) {
+    logger.error({ err }, 'application startup failed');
+    clearInterval(reminderTimer);
+    server.close(() => process.exit(1));
+    return server;
+  }
 
   const shutdown = async (signal) => {
+    clearInterval(reminderTimer);
     logger.info({ signal }, 'shutting down');
     server.close(async () => {
       await pool.end().catch(() => {});

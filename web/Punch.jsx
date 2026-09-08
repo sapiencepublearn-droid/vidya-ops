@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { newActionKey, readFix } from './api-client.js';
 
 /**
@@ -50,15 +50,20 @@ function messageFor(e) {
   }
 }
 
-export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M, Btn }) {
+export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [], onTasksDone, onDone, onRetryLoad, M, Btn }) {
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(null);
   const [problem, setProblem] = useState(null);
   const [result, setResult] = useState(null);     // punch-in or punch-out response
   const [reporting, setReporting] = useState(false);
   const [reported, setReported] = useState(false);
+  const [endDayOpen, setEndDayOpen] = useState(false);
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const fieldRole = role === 'Trainer' || role === 'Technical Support';
+  const isTrainer = role === 'Trainer';
   // Held across retries of one tap, so a lost response cannot double-punch.
   const actionKey = useRef(null);
+  const endDayActionKey = useRef(null);
 
   const reasonFor = (e) => ({
     outside_radius: 'outside_radius', poor_accuracy: 'poor_accuracy',
@@ -73,7 +78,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
     try {
       setStage('Getting location…');
       const fix = await readFix();
-      setStage(mode === 'in' ? 'Checking attendance location…' : 'Completing attendance…');
+      setStage(mode === 'in' ? (fieldRole ? 'Recording your punch in…' : 'Checking attendance location…') : (fieldRole ? 'Recording your punch out…' : 'Completing attendance…'));
       const r = mode === 'in'
         ? await api.checkIn(fix, actionKey.current)
         : await api.checkOut(fix, actionKey.current);
@@ -82,6 +87,39 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
       await onDone();
     } catch (e) {
       setProblem({ ...e, code: e.code, status: e.status, mode });
+    } finally {
+      setBusy(false); setStage(null);
+    }
+  };
+
+  const openEndDay = () => {
+    // Tasks already completed during the day are shown as checked and locked.
+    // Pending work starts unchecked. It remains open for a later session
+    // tonight and automatically appears as overdue/carry-forward tomorrow.
+    setSelectedTaskIds((todayTasks || []).filter((t) => t.effective_status === 'Completed' || t.status === 'Completed').map((t) => t.task_id));
+    setEndDayOpen(true);
+  };
+
+  const confirmEndDay = async () => {
+    if (busy) return;
+    setBusy(true); setProblem(null); setEndDayOpen(false);
+    try {
+      if (!endDayActionKey.current) endDayActionKey.current = newActionKey();
+      setStage('Getting location…');
+      const fix = await readFix();
+      setStage(fieldRole ? 'Checking out and saving today’s work…' : 'Checking attendance location…');
+      const out = await api.endDay({ completedTaskIds: selectedTaskIds, ...fix }, endDayActionKey.current);
+      endDayActionKey.current = null;
+      onTasksDone?.();
+      // End Day closes only the current session. Clear the transient result
+      // after the attendance refresh so a second Punch In is available later
+      // on the same business day.
+      await onDone();
+      setResult(null);
+    } catch (e) {
+      setProblem({ ...e, code: e.code, status: e.status, mode: 'out' });
+      // The server performs task updates and punch-out atomically, so a failed
+      // punch-out leaves today's task state unchanged.
     } finally {
       setBusy(false); setStage(null);
     }
@@ -141,7 +179,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
     return (
       <div style={{ marginBottom: 40 }}>
         <div className="mono" style={label}>
-          {type === 'SCHOOL' ? 'School visit' : 'Office attendance'}
+          {type === 'SCHOOL' ? 'School visit' : type === 'ANYWHERE' ? 'Field attendance' : 'Office attendance'}
         </div>
         <div className="tight" style={{ fontSize: 34, fontWeight: 600, lineHeight: 1, marginBottom: 10 }}>
           {istTime(att.check_in_time)}
@@ -154,10 +192,12 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
           {att.status}{att.check_in_accuracy ? ` · ±${att.check_in_accuracy} m` : ''}
         </M>
 
-        <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('out')}
-          label="Punch Out" variant="line" />
+        {isTrainer && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
+        <BigButton T={T} busy={busy} stage={stage} onClick={openEndDay}
+          label="End Day" variant="line" />
         <Problem T={T} problem={problem} reported={reported} reporting={reporting}
           onRetry={() => punch(problem.mode)} onReport={report} Btn={Btn} M={M} />
+        {endDayOpen && <EndDayChecklist T={T} tasks={todayTasks} selectedTaskIds={selectedTaskIds} setSelectedTaskIds={setSelectedTaskIds} busy={busy} onCancel={() => setEndDayOpen(false)} onConfirm={confirmEndDay} />}
       </div>
     );
   }
@@ -168,7 +208,7 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
       <div className="mono" style={label}>Attendance</div>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 6 }}>Not punched in</div>
       <div style={{ fontSize: 13, color: T.mute, marginBottom: 20, lineHeight: 1.6 }}>
-        Press Punch In. Your location is read once and the office or school is worked out for you.
+        Press Punch In. Your GPS is recorded, but Trainers and Technical Support are not restricted to a designated punch location.
       </div>
       <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('in')}
         label="Punch In" variant="accent" />
@@ -176,6 +216,34 @@ export function PunchPanel({ T, api, att, loading, error, onDone, onRetryLoad, M
         onRetry={() => punch(problem.mode)} onReport={report} Btn={Btn} M={M} />
     </div>
   );
+}
+
+function EndDayChecklist({ T, tasks, selectedTaskIds, setSelectedTaskIds, busy, onCancel, onConfirm }) {
+  const toggle = (task) => {
+    if (task.status === 'Completed' || task.effective_status === 'Completed') return;
+    setSelectedTaskIds((cur) => cur.includes(task.task_id) ? cur.filter((x) => x !== task.task_id) : [...cur, task.task_id]);
+  };
+  return <div className="fade" style={{ position:'fixed', inset:0, background:T.overlay, display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:60 }}>
+    <div className="rise" style={{ width:'100%', maxWidth:420, background:T.bg, padding:24, borderTop:`1px solid ${T.line}`, maxHeight:'88vh', overflowY:'auto' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8 }}>
+        <div className="tight" style={{ fontSize:20, fontWeight:600 }}>End Day</div>
+        <button className="press" onClick={onCancel} style={{background:'none',border:'none',color:T.faint,fontSize:18,cursor:'pointer'}}>×</button>
+      </div>
+      <div style={{ fontSize:13, color:T.mute, lineHeight:1.55, marginBottom:20 }}>Select the work you completed today. Anything you leave unchecked will remain pending and move to tomorrow.</div>
+      {!tasks.length ? <div style={{padding:'14px 0',fontSize:13,color:T.mute,borderTop:`1px solid ${T.line}`,borderBottom:`1px solid ${T.line}`,marginBottom:20}}>No work assigned for today.</div> : <div style={{borderTop:`1px solid ${T.line}`,marginBottom:20}}>{tasks.map(t=>{
+        const checked=selectedTaskIds.includes(t.task_id);
+        return <button key={t.task_id} type="button" className="press" onClick={()=>toggle(t)} style={{width:'100%',display:'flex',alignItems:'center',gap:12,textAlign:'left',padding:'14px 0',background:'none',border:'none',borderBottom:`1px solid ${T.line}`,color:T.text,cursor:(t.status === 'Completed' || t.effective_status === 'Completed')?'default':'pointer'}}>
+          <span style={{width:22,height:22,borderRadius:6,border:`1px solid ${checked?T.text:T.line}`,background:checked?T.text:'transparent',color:checked?T.bg:'transparent',display:'grid',placeItems:'center',fontSize:14,flex:'0 0 auto'}}>{checked?'✓':''}</span>
+          <span style={{flex:1,minWidth:0}}><span style={{display:'block',fontSize:13,fontWeight:500}}>{t.title}</span><span style={{display:'block',fontSize:11,color:T.faint,marginTop:4}}>{t.status === 'Completed' || t.effective_status === 'Completed' ? 'Completed' : `${t.priority} · due ${t.due_time ? String(t.due_time).slice(0,5) : '—'}`}</span></span>
+        </button>;
+      })}</div>}
+      <div style={{display:'flex',gap:8}}><BtnLike T={T} onClick={onCancel}>Cancel</BtnLike><BtnLike T={T} solid busy={busy} onClick={onConfirm}>{busy?'Ending Session…':'Check Out & End Day'}</BtnLike></div>
+    </div>
+  </div>;
+}
+
+function BtnLike({ T, children, onClick, solid, busy }) {
+  return <button className="press" onClick={onClick} disabled={busy} style={{flex:1,padding:'13px 12px',borderRadius:9,border:solid?'none':`1px solid ${T.line}`,background:solid?T.text:'transparent',color:solid?T.bg:T.text,fontSize:13,fontWeight:500,cursor:busy?'wait':'pointer'}}>{children}</button>;
 }
 
 /** Large, unmissable, and disabled while a request is in flight. */
@@ -230,29 +298,98 @@ function Problem({ T, problem, reported, reporting, onRetry, onReport, Btn, M })
   );
 }
 
+/* ─────────────────────────────────────────── trainer school visits */
+
+function SchoolVisitPanel({ T, api, M, Btn }) {
+  const [data, setData] = useState(null);
+  const [schoolId, setSchoolId] = useState('');
+  const [schoolQuery, setSchoolQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = async () => {
+    try { setError(null); setData(await api.schoolVisitsToday()); }
+    catch (e) { setError(e); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const fix = () => readFix();
+  const start = async () => {
+    if (!schoolId) return;
+    setBusy(true); setError(null);
+    try { await api.schoolVisitCheckIn({ ...(await fix()), locationId: schoolId }, newActionKey()); await load(); }
+    catch (e) { setError(e); }
+    finally { setBusy(false); }
+  };
+  const finish = async () => {
+    if (!data?.active) return;
+    setBusy(true); setError(null);
+    try { await api.schoolVisitCheckOut({ ...(await fix()), visitId: data.active.visit_id }, newActionKey()); await load(); }
+    catch (e) { setError(e); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ borderTop: `1px solid ${T.line}`, marginTop: 24, paddingTop: 20, marginBottom: 20 }}>
+      <div className="mono" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.14em', color: T.faint, marginBottom: 10 }}>School Visit</div>
+      {data?.active ? (
+        <>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>{data.active.school_name}</div>
+          {data.active.school_zone && <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 3 }}>{data.active.school_zone}</M>}
+          <M style={{ fontSize: 11, color: T.mute, display: 'block', marginTop: 8 }}>Checked in at {istTime(data.active.check_in_time)}</M>
+          <div style={{ marginTop: 14 }}><Btn variant="line" busy={busy} onClick={finish}>School Check Out</Btn></div>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>At the assigned school, select it and check in. Check out when you leave the school.</div>
+          <div style={{ position: 'relative', marginBottom: 10 }}>
+            <input value={schoolQuery} disabled={busy} onChange={(e) => { setSchoolQuery(e.target.value); setSchoolId(''); }}
+              placeholder="Type school name…" autoComplete="off"
+              style={{ width: '100%', padding: '12px', borderRadius: 8, border: `1px solid ${T.line}`, background: T.bg, color: T.text, outline: 'none', boxSizing: 'border-box' }} />
+            {schoolQuery.trim() && !schoolId && (
+              <div style={{ position: 'absolute', zIndex: 5, left: 0, right: 0, top: 'calc(100% + 4px)', background: T.bg, border: `1px solid ${T.line}`, borderRadius: 8, maxHeight: 220, overflowY: 'auto', boxShadow: '0 10px 30px rgba(0,0,0,.18)' }}>
+                {(data?.schools || []).filter((s) => s.name.toLowerCase().includes(schoolQuery.trim().toLowerCase()) || (s.zone || '').toLowerCase().includes(schoolQuery.trim().toLowerCase())).slice(0, 12).map((s) => (
+                  <button key={s.id} type="button" className="press" onClick={() => { setSchoolId(s.id); setSchoolQuery(s.name); }}
+                    style={{ width: '100%', textAlign: 'left', padding: '11px 12px', background: 'none', border: 'none', borderBottom: `1px solid ${T.hair}`, color: T.text, cursor: 'pointer' }}>
+                    <span style={{ display: 'block', fontSize: 13 }}>{s.name}</span>
+                    {s.zone && <span style={{ display: 'block', fontSize: 11, color: T.faint, marginTop: 3 }}>{s.zone}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <Btn busy={busy} onClick={start} disabled={!schoolId}>School Check In</Btn>
+        </>
+      )}
+      {error && <div style={{ color: T.accent, fontSize: 12, marginTop: 10 }}>{error.message}</div>}
+    </div>
+  );
+}
+
 /* ─────────────────────────────────────────── completed attendance */
 
 function Completed({ T, att, result, M, Btn, label }) {
-  const type = result?.locationType || att?.location_type;
-  const place = result?.location || att?.site_name;
-  const zone = result?.zone || att?.site_zone;
+  const finalAtt = result?.attendance || att;
+  const type = result?.locationType || finalAtt?.location_type;
+  const place = result?.location || finalAtt?.site_name;
+  const zone = result?.zone || finalAtt?.site_zone;
   const draft = result?.visitDraft || null;
 
   return (
     <div className="pop" style={{ marginBottom: 40 }}>
       <div className="mono" style={label}>Attendance completed</div>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 16 }}>
-        {type === 'SCHOOL' ? 'School visit' : 'Office attendance'}
+        {type === 'SCHOOL' ? 'School visit' : type === 'ANYWHERE' ? 'Field attendance' : 'Office attendance'}
       </div>
 
       <div style={{ display: 'grid', gap: 12, marginBottom: 24 }}>
         {[
-          ['Date', istDay(att?.work_date)],
+          ['Date', istDay(finalAtt?.work_date)],
           [type === 'SCHOOL' ? 'School' : 'Location', place || '—'],
           ...(type === 'SCHOOL' && zone ? [['Zone', zone]] : []),
-          ['Punch In', istTime(att?.check_in_time)],
-          ['Punch Out', istTime(att?.check_out_time)],
-          ['Status', att?.status || '—'],
+          ['Punch In', istTime(finalAtt?.check_in_time)],
+          ['Punch Out', istTime(finalAtt?.check_out_time)],
+          ['Status', finalAtt?.status || '—'],
         ].map(([k, v]) => (
           <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 14 }}>
             <span style={{ color: T.mute }}>{k}</span>

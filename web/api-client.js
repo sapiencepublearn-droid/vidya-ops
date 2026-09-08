@@ -22,6 +22,14 @@ export const newActionKey = () =>
 export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
   let token = null;
   let employee = null;
+  // Keep the signed-in session across an accidental browser refresh/tab reload.
+  // sessionStorage is cleared when the browser session ends and is never used
+  // as a substitute for server-side token validation.
+  try {
+    token = sessionStorage?.getItem('sapience_auth_token') || null;
+    const saved = sessionStorage?.getItem('sapience_auth_employee');
+    employee = saved ? JSON.parse(saved) : null;
+  } catch { token = null; employee = null; }
 
   async function request(path, { method = 'GET', body, isForm, idempotencyKey } = {}) {
     const headers = {};
@@ -49,7 +57,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     if (!res.ok) {
       if (res.status === 401) {
         token = null; employee = null;
-        try { localStorage?.clear?.(); sessionStorage?.clear?.(); } catch { /* best effort */ }
+        try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
         onUnauthenticated?.(data?.error);
       }
       throw new ApiError(res.status, data?.error || 'error',
@@ -58,6 +66,33 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     return data;
   }
 
+    const requestBlob = async (path, { method = 'GET', body, idempotencyKey } = {}) => {
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+      let res;
+      try {
+        res = await fetch(`${baseUrl}${path}`, {
+          method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+        });
+      } catch {
+        throw new ApiError(0, 'network_error', 'Could not reach the server. Check your connection.');
+      }
+      if (!res.ok) {
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON error */ }
+        if (res.status === 401) {
+          token = null; employee = null;
+          try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
+          onUnauthenticated?.(data?.error);
+        }
+        throw new ApiError(res.status, data?.error || 'error', data?.message || 'Something went wrong.', data?.details, data?.requestId);
+      }
+      return res.blob();
+    }
+
   return {
     get session() { return employee; },
     get isAuthenticated() { return !!token; },
@@ -65,6 +100,10 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     async login(email, password) {
       const out = await request('/auth/login', { method: 'POST', body: { email, password } });
       token = out.token; employee = out.employee;
+      try {
+        sessionStorage?.setItem('sapience_auth_token', token);
+        sessionStorage?.setItem('sapience_auth_employee', JSON.stringify(employee));
+      } catch { /* best effort */ }
       return employee;
     },
     async logout() {
@@ -77,12 +116,14 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         // last one. API responses were never cached; this clears the shell
         // cache and any storage a future change might introduce.
         try {
+          sessionStorage?.removeItem('sapience_auth_token');
+          sessionStorage?.removeItem('sapience_auth_employee');
           if (typeof caches !== 'undefined') {
             const keys = await caches.keys();
             await Promise.all(keys.map((k) => caches.delete(k)));
           }
-          localStorage?.clear?.();
-          sessionStorage?.clear?.();
+          sessionStorage?.removeItem('sapience_auth_token');
+          sessionStorage?.removeItem('sapience_auth_employee');
         } catch { /* clearing is best effort; the session is already gone */ }
       }
     },
@@ -91,6 +132,9 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     sites: () => request('/attendance/sites'),
     checkIn: (fix, key) => request('/attendance/check-in', { method: 'POST', body: fix, idempotencyKey: key }),
     checkOut: (fix, key) => request('/attendance/check-out', { method: 'POST', body: fix, idempotencyKey: key }),
+    schoolVisitsToday: () => request('/attendance/school-visits/today'),
+    schoolVisitCheckIn: (body, key) => request('/attendance/school-visits/check-in', { method: 'POST', body, idempotencyKey: key }),
+    schoolVisitCheckOut: (body, key) => request('/attendance/school-visits/check-out', { method: 'POST', body, idempotencyKey: key }),
     reportIncident: (body, key) => request('/attendance/incidents', { method: 'POST', body, idempotencyKey: key }),
     myIncidents: () => request('/attendance/incidents/me'),
     myAttendance: (month) => request(`/attendance/me${month ? `?month=${month}` : ''}`),
@@ -104,9 +148,14 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     task: (id) => request(`/tasks/${id}`),
     startTask: (id) => request(`/tasks/${id}/start`, { method: 'POST' }),
     submitTask: (id, body, key) => request(`/tasks/${id}/submit`, { method: 'POST', body, idempotencyKey: key }),
+    endDay: (body, key) => request('/attendance/end-day', { method: 'POST', body, idempotencyKey: key }),
 
     myClaims: (month) => request(`/claims/me${month ? `?month=${month}` : ''}`),
     createClaim: (body, key) => request('/claims', { method: 'POST', body, idempotencyKey: key }),
+    myContributions: () => request('/contributions/me'),
+    workDone: (from, to) => request(`/work-done/me${from || to ? `?${new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString()}` : ''}`),
+    saveWorkDone: (body, key) => request('/work-done/me', { method: 'PUT', body, idempotencyKey: key }),
+    createContribution: (body, key) => request('/contributions', { method: 'POST', body, idempotencyKey: key }),
 
     async uploadFile(file) {
       const form = new FormData();
@@ -129,9 +178,42 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       dashboard: () => request('/admin/dashboard'),
       employees: () => request('/admin/employees'),
       createEmployee: (body) => request('/admin/employees', { method: 'POST', body }),
+      updateEmployee: (id, body) => request(`/admin/employees/${id}`, { method: 'PATCH', body }),
+      employeeDashboard: (id, from, to) => request(`/admin/employees/${id}/dashboard?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
       createTask: (body) => request('/tasks', { method: 'POST', body }),
-      claims: (status) => request(`/admin/claims${status ? `?status=${status}` : ''}`),
-      decideClaim: (id, body, key) => request(`/admin/claims/${id}/decide`, { method: 'POST', body, idempotencyKey: key }),
+      claims: ({ status, cycle } = {}) => {
+        const qs = new URLSearchParams();
+        if (status) qs.set('status', status);
+        if (cycle) qs.set('cycle', cycle);
+        const q = qs.toString();
+        return request(`/admin/claims${q ? `?${q}` : ''}`);
+      },
+      claimCycles: () => request('/admin/claims/cycles'),
+      // Cycle dates are a date-only API contract. Normalize legacy/driver
+      // timestamp values such as 2026-09-05T00:00:00.000Z before building
+      // the route so weekly actions never fail validation with 422.
+      cycleDate: (cycle) => String(cycle || '').slice(0, 10),
+      reviewClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/review`, { method: 'POST', idempotencyKey: key });
+      },
+      closeClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/close`, { method: 'POST', idempotencyKey: key });
+      },
+      clearClaimCycle: (cycle, key) => {
+        const c = String(cycle || '').slice(0, 10);
+        return request(`/admin/claims/cycles/${encodeURIComponent(c)}/clear`, { method: 'POST', body: { confirm: 'CLEAR' }, idempotencyKey: key });
+      },
+      exportClaims: async (cycle) => {
+        const c = String(cycle || '').slice(0, 10);
+        const blob = await requestBlob(`/admin/claims/cycles/${encodeURIComponent(c)}/export.xls`);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `claims-${c}.xls`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      },
       incidents: (state) => request(`/admin/incidents${state ? `?state=${state}` : ''}`),
       resolveIncident: (id, body, key) => request(`/admin/incidents/${id}/resolve`, { method: 'POST', body, idempotencyKey: key }),
       approve: (id, key) => request(`/admin/submissions/${id}/approve`, { method: 'POST', idempotencyKey: key }),
@@ -140,6 +222,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       attendance: (date) => request(`/admin/attendance${date ? `?date=${date}` : ''}`),
       createSchool: (body, key) => request('/admin/schools', { method: 'POST', body, idempotencyKey: key }),
       updateSchool: (id, body, key) => request(`/admin/schools/${id}`, { method: 'PATCH', body, idempotencyKey: key }),
+      updateSchoolHistory: (id, body, key) => request(`/admin/schools/${id}/history`, { method: 'PUT', body, idempotencyKey: key }),
       setSchoolLocationFromIncident: (id, body, key) =>
         request(`/admin/schools/${id}/location-from-incident`, { method: 'POST', body, idempotencyKey: key }),
       incidents: (state) => request(`/admin/incidents${state ? `?state=${state}` : ''}`),
@@ -149,6 +232,10 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       publishBroadcast: (body, key) => request('/admin/broadcasts', { method: 'POST', body, idempotencyKey: key }),
       publishWords: (words, date) => request('/admin/lat/sets', { method: 'POST', body: { words, ...(date ? { date } : {}) } }),
       latResults: (date) => request(`/admin/lat/results${date ? `?date=${date}` : ''}`),
+      testReset: (key) => request('/admin/test/reset', { method: 'POST', body: { confirm: 'RESET ALL TEST DATA' }, idempotencyKey: key }),
+      contributions: (status) => request(`/admin/contributions${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+      tasks: (date) => request(`/admin/tasks${date ? `?date=${encodeURIComponent(date)}` : ''}`),
+      replyContribution: (id, body, key) => request(`/admin/contributions/${id}/reply`, { method: 'POST', body, idempotencyKey: key }),
     },
   };
 }
