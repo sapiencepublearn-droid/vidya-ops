@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, createContext, useContext, use
 import { createClient, ApiError, readFix, newActionKey } from './api-client.js';
 import { LatCard, LatScreen, AdminLat } from './Lat.jsx';
 import { BroadcastCard, BroadcastList, AdminBroadcasts } from './Broadcast.jsx';
-import { AdminSchools } from './Schools.jsx';
+import { AdminSchools, EmployeeSchools } from './Schools.jsx';
 import { PunchPanel } from './Punch.jsx';
 
 /* ═══════════════════════════════════════════════════════════════ tokens */
@@ -411,7 +411,7 @@ function Employee({ me, onOut, theme, setTheme }) {
   useEffect(() => { const id = setInterval(() => notifications.reload(), 60000); return () => clearInterval(id); }, [notifications.reload]);
 
   const nav = [
-    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
+    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['lat', 'LAT'],
     ['contributions', 'Contributions'], ['workdone', 'Work Done'],
     ...(profile.data?.claims_enabled ? [['claims', 'Claims']] : []),
     ['profile', 'Profile'],
@@ -438,6 +438,8 @@ function Employee({ me, onOut, theme, setTheme }) {
             onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
           : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
             : tab === 'attendance' ? <EAttendance profile={profile} />
+              : tab === 'schools' ? <EmployeeSchools T={T} api={api} isPhone={isPhone} useResource={useResource}
+                  Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} Blank={Blank} M={M} />
               : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
                 : tab === 'claims' ? <EClaims profile={profile} />
                 : tab === 'contributions' ? <EContributions />
