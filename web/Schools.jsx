@@ -5,8 +5,8 @@ import { SchoolMap, EvidenceMap, googleMapsUrl } from './SchoolMap.jsx';
 /**
  * Schools — the places trainers visit.
  *
- * Admin only. Employees never see these controls, and the server refuses
- * them regardless of what the interface offers.
+ * The school directory is readable by every signed-in employee. Editing,
+ * assignment, history changes, and other admin controls remain admin-only.
  *
  * Sized for roughly 140 schools: a search box and a zone filter over a
  * plain list. No map, no clustering, no virtualised grid.
@@ -16,6 +16,128 @@ const istDate = (d) => d ? new Date(d).toLocaleDateString('en-IN',
   { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }) : '—';
 const istTime = (t) => t ? new Date(t).toLocaleTimeString('en-IN',
   { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }) : '—';
+
+
+/** Read-only school directory for trainers and other employees. */
+export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+  const [mapOpen, setMapOpen] = useState(false);
+  const schools = useResource(() => api.schools('?active=true'), []);
+  const list = schools.data || [];
+
+  const filtered = list.filter((s) => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return true;
+    return String(s.name || '').toLowerCase().includes(needle)
+      || String(s.zone || '').toLowerCase().includes(needle)
+      || String(s.address || '').toLowerCase().includes(needle);
+  });
+
+  if (open) {
+    return <EmployeeSchoolDetail T={T} api={api} id={open} isPhone={isPhone}
+      onBack={() => { setOpen(null); schools.reload(); }} useResource={useResource}
+      Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} M={M} />;
+  }
+
+  const input = {
+    padding: '10px 12px', borderRadius: 8, fontSize: 14, background: 'transparent',
+    border: `1px solid ${T.line}`, color: T.text, outline: 'none', width: '100%',
+  };
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 20 }}>
+        <div>
+          <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
+          <div style={{ fontSize: 12, color: T.mute, marginTop: 5 }}>Find your school and its location.</div>
+        </div>
+        <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
+      </div>
+
+      <input value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder="Search school, zone or address" style={{ ...input, marginBottom: 18 }} />
+
+      {schools.loading ? <Rows n={6} />
+        : schools.error ? <ErrorBlock error={schools.error} onRetry={schools.reload} />
+        : !filtered.length ? <Blank title={list.length ? 'No schools match your search' : 'No schools available'} />
+        : (
+          <div style={{ borderTop: `1px solid ${T.line}` }}>
+            {filtered.map((s) => (
+              <button key={s.location_id} className="row press" onClick={() => setOpen(s.location_id)}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '15px 0', background: 'none', border: 'none', borderBottom: `1px solid ${T.line}`, cursor: 'pointer', color: T.text }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
+                    <div style={{ fontSize: 12, color: T.mute, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.zone}{s.address ? ` · ${s.address}` : ''}
+                    </div>
+                  </div>
+                  <span style={{ color: T.faint, fontSize: 18 }}>›</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+      {mapOpen && <SchoolMap T={T} schools={list} isPhone={isPhone}
+        onViewDetails={(id) => { setMapOpen(false); setOpen(id); }}
+        onClose={() => setMapOpen(false)} />}
+    </>
+  );
+}
+
+function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, ErrorBlock, Rows, M }) {
+  const detail = useResource(() => api.school(id), [id]);
+  const back = (
+    <div style={{ position: isPhone ? 'sticky' : 'static', top: isPhone ? 56 : undefined, zIndex: 10, background: T.bg, padding: '8px 0 10px', marginBottom: 16, borderBottom: `1px solid ${T.line}` }}>
+      <button className="press" onClick={onBack} aria-label="Back to schools" style={{ background: 'none', border: 'none', color: T.text, fontSize: 13, cursor: 'pointer', padding: '6px 0', fontWeight: 500 }}>← Back to Schools</button>
+    </div>
+  );
+
+  if (detail.loading) return <>{back}<Rows n={5} /></>;
+  if (detail.error) return <>{back}<ErrorBlock error={detail.error} onRetry={detail.reload} /></>;
+
+  const s = detail.data;
+  const maps = googleMapsUrl(s);
+  return (
+    <div>
+      {back}
+      <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>{s.name}</h1>
+      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone}{s.is_active ? '' : ' · inactive'}</div>
+
+      <div style={{ borderTop: `1px solid ${T.line}` }}>
+        {[
+          ['Address', s.address],
+          ['Contact', s.contact_person],
+          ['Designation', s.contact_designation],
+        ].filter(([, v]) => v).map(([k, v]) => (
+          <div key={k} style={{ display: 'grid', gridTemplateColumns: isPhone ? '100px 1fr' : '140px 1fr', gap: 12, padding: '13px 0', borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+            <span style={{ color: T.mute }}>{k}</span><span style={{ overflowWrap: 'anywhere' }}>{v}</span>
+          </div>
+        ))}
+        {s.contact_phone && (
+          <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '100px 1fr' : '140px 1fr', gap: 12, padding: '13px 0', borderBottom: `1px solid ${T.line}`, fontSize: 13 }}>
+            <span style={{ color: T.mute }}>Phone</span><a href={`tel:${s.contact_phone}`} style={{ color: T.text }}>{s.contact_phone}</a>
+          </div>
+        )}
+      </div>
+
+      {maps && (
+        <a className="press" href={maps} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: 20, color: T.text, fontSize: 13 }}>Open location in Google Maps ↗</a>
+      )}
+
+      {maps && (
+        <div style={{ marginTop: 20, paddingTop: 18, borderTop: `1px solid ${T.line}` }}>
+          <div className="mono" style={{ fontSize: 11, color: T.faint }}>LOCATION</div>
+          <div style={{ fontSize: 13, marginTop: 6 }}>{Number(s.latitude).toFixed(6)}, {Number(s.longitude).toFixed(6)}</div>
+        </div>
+      )}
+
+      <SchoolHistoryCard T={T} api={api} school={s} editing={false} setEditing={() => {}} M={M} Btn={Btn} isPhone={isPhone} readOnly />
+    </div>
+  );
+}
 
 export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
   const [q, setQ] = useState('');
@@ -558,7 +680,7 @@ function importSchoolHistoryTemplate(cells, current) {
   put('comments',cell(lastRowWith('COMMENTS'),2));
   return {out,schoolName};
 }
-function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone }) {
+function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone, readOnly = false }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [commentPopup,setCommentPopup]=useState(null);
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
@@ -568,8 +690,8 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
   const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:isPhone?24:40,padding:isPhone?12:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub,overflow:'hidden'}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div><button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button></div>
-    {!filled ? <M style={{fontSize:13,color:T.mute}}>No history details entered yet. Use the corner edit button to add the school record.</M> : historySections.map(([title,fields])=>{
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
+    {!filled ? <M style={{fontSize:13,color:T.mute}}>{readOnly ? 'No history details entered yet.' : 'No history details entered yet. Use the corner edit button to add the school record.'}</M> : historySections.map(([title,fields])=>{
       const vals=fields.map(([path,label])=>[path,label,String(getPath(initial,path)).trim()]).filter(([, ,v])=>v);
       if(!vals.length)return null;
       return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}>
@@ -612,7 +734,7 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
       {commentPopup && <div className="fade" role="dialog" aria-modal="true" aria-label={`${commentPopup.title} comments`} onClick={()=>setCommentPopup(null)} style={{position:'fixed',inset:0,zIndex:120,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:420,maxHeight:isPhone?'70vh':'60vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:12,padding:16,boxSizing:'border-box',boxShadow:'0 12px 40px rgba(0,0,0,.18)'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}><div style={{fontSize:14,fontWeight:600}}>{commentPopup.title} — Comments</div><button type="button" className="press" onClick={()=>setCommentPopup(null)} aria-label="Close comments" style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.line}`,background:'transparent',color:T.text,cursor:'pointer',fontSize:18}}>×</button></div><div style={{fontSize:13,lineHeight:1.55,color:T.text,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{commentPopup.comment}</div></div></div>}
       </div>
     })}
-    {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
+    {!readOnly && editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
       <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2025–2026 School History format and fills the form. You can edit anything before saving.</span></div>
       {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn:/comments|remarks|appComments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label)?<textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/>:<input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
