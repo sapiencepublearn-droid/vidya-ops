@@ -706,9 +706,11 @@ const googleMapsResolveSchema = z.object({
 
 function extractGoogleMapsCoordinates(text) {
   const value = String(text || '');
+  // IMPORTANT: Google Maps' /@lat,lng/ is often only the viewport centre.
+  // Never use it as the school's saved position. Prefer the place's !3d/!4d
+  // coordinates, then explicit query/destination coordinates.
   const patterns = [
     /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
-    /@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
     /[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /\/place\/\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
   ];
