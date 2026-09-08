@@ -2,9 +2,9 @@
  * The single way the frontend talks to the API. No component calls fetch
  * directly, so auth, error shape and the 401 path are handled in one place.
  *
- * The token is held in memory only. It is deliberately not in
- * localStorage: any XSS on the page could read it there, and this app has
- * no cross-tab requirement that would justify the risk.
+ * The signed-in session is persisted so the installed/PWA experience survives
+ * closing and reopening the app. Server-side token expiry/revocation still logs
+ * the user out, and explicit logout clears the persisted session.
  */
 export class ApiError extends Error {
   constructor(status, code, message, details, requestId) {
@@ -26,8 +26,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
   // sessionStorage is cleared when the browser session ends and is never used
   // as a substitute for server-side token validation.
   try {
-    token = sessionStorage?.getItem('sapience_auth_token') || null;
-    const saved = sessionStorage?.getItem('sapience_auth_employee');
+    token = localStorage?.getItem('sapience_auth_token') || sessionStorage?.getItem('sapience_auth_token') || null;
+    const saved = localStorage?.getItem('sapience_auth_employee') || sessionStorage?.getItem('sapience_auth_employee');
     employee = saved ? JSON.parse(saved) : null;
   } catch { token = null; employee = null; }
 
@@ -57,7 +57,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
     if (!res.ok) {
       if (res.status === 401) {
         token = null; employee = null;
-        try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
+        try { localStorage?.removeItem('sapience_auth_token'); localStorage?.removeItem('sapience_auth_employee');
+          sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
         onUnauthenticated?.(data?.error);
       }
       throw new ApiError(res.status, data?.error || 'error',
@@ -85,7 +86,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON error */ }
         if (res.status === 401) {
           token = null; employee = null;
-          try { sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
+          try { localStorage?.removeItem('sapience_auth_token'); localStorage?.removeItem('sapience_auth_employee');
+          sessionStorage?.removeItem('sapience_auth_token'); sessionStorage?.removeItem('sapience_auth_employee'); } catch { /* best effort */ }
           onUnauthenticated?.(data?.error);
         }
         throw new ApiError(res.status, data?.error || 'error', data?.message || 'Something went wrong.', data?.details, data?.requestId);
@@ -101,6 +103,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       const out = await request('/auth/login', { method: 'POST', body: { email, password } });
       token = out.token; employee = out.employee;
       try {
+        localStorage?.setItem('sapience_auth_token', token);
+        localStorage?.setItem('sapience_auth_employee', JSON.stringify(employee));
         sessionStorage?.setItem('sapience_auth_token', token);
         sessionStorage?.setItem('sapience_auth_employee', JSON.stringify(employee));
       } catch { /* best effort */ }
@@ -116,6 +120,8 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
         // last one. API responses were never cached; this clears the shell
         // cache and any storage a future change might introduce.
         try {
+          localStorage?.removeItem('sapience_auth_token');
+          localStorage?.removeItem('sapience_auth_employee');
           sessionStorage?.removeItem('sapience_auth_token');
           sessionStorage?.removeItem('sapience_auth_employee');
           if (typeof caches !== 'undefined') {
@@ -220,7 +226,6 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       returnWork: (id, reason, key) => request(`/admin/submissions/${id}/return`, { method: 'POST', body: { reason }, idempotencyKey: key }),
       audit: () => request('/admin/audit'),
       attendance: (date) => request(`/admin/attendance${date ? `?date=${date}` : ''}`),
-      resolveGoogleMaps: (url) => request('/admin/schools/resolve-google-maps', { method: 'POST', body: { url } }),
       createSchool: (body, key) => request('/admin/schools', { method: 'POST', body, idempotencyKey: key }),
       updateSchool: (id, body, key) => request(`/admin/schools/${id}`, { method: 'PATCH', body, idempotencyKey: key }),
       updateSchoolHistory: (id, body, key) => request(`/admin/schools/${id}/history`, { method: 'PUT', body, idempotencyKey: key }),

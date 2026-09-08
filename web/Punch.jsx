@@ -341,7 +341,7 @@ function SchoolVisitPanel({ T, api, M, Btn }) {
         </>
       ) : (
         <>
-          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>At the assigned school, select it and check in. Check out when you leave the school.</div>
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>Only schools assigned to you are shown here. Select your assigned school and check in. Check out when you leave the school.</div>
           <div style={{ position: 'relative', marginBottom: 10 }}>
             <input value={schoolQuery} disabled={busy} onChange={(e) => { setSchoolQuery(e.target.value); setSchoolId(''); }}
               placeholder="Type school name…" autoComplete="off"
