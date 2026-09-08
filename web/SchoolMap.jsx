@@ -18,8 +18,13 @@ const INDIA_CENTRE = [22.0, 79.0];
 const ACCENT = '#d9451f';
 
 /** Google Maps directions. Navigation happens there, not here. */
+export function googleMapsUrl(school) {
+  if (school?.latitude === null || school?.longitude === null || school?.latitude === undefined || school?.longitude === undefined) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${school.latitude},${school.longitude}`)}`;
+}
+
 export function directionsUrl(school, from) {
-  if (school.latitude === null || school.longitude === null) return null;
+  if (!school || school.latitude === null || school.longitude === null || school.latitude === undefined || school.longitude === undefined) return null;
   const params = new URLSearchParams({
     api: '1',
     destination: `${school.latitude},${school.longitude}`,
@@ -31,7 +36,7 @@ export function directionsUrl(school, from) {
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
-const hasCoords = (s) => s.latitude !== null && s.longitude !== null;
+const hasCoords = (s) => Boolean(s) && s.latitude !== null && s.longitude !== null && s.latitude !== undefined && s.longitude !== undefined;
 
 export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   const [me, setMe] = useState(null);
@@ -206,8 +211,14 @@ export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
                 )}
               </div>
             )}
-            <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 10 }}>
-              {selected.latitude}, {selected.longitude} · {selected.radius_metres} m radius
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+              <a className="press" href={googleMapsUrl(selected)} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 12, color: T.text }}>
+                Open in Google Maps
+              </a>
+              <span className="mono" style={{ fontSize: 11, color: T.faint }}>
+                {selected.radius_metres} m radius
+              </span>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
               <button className="press" style={btn(false)}

@@ -699,6 +699,62 @@ router.put('/admin/schools/:id/history', adminOnly, uuidParam('id'), idempotent(
   res.json(row);
 })));
 
+
+const googleMapsResolveSchema = z.object({
+  url: z.string().trim().url().max(2000),
+}).strict();
+
+function extractGoogleMapsCoordinates(text) {
+  const value = String(text || '');
+  const patterns = [
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
+    /@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
+    /[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+    /\/place\/\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+  ];
+  for (const re of patterns) {
+    const m = value.match(re);
+    if (!m) continue;
+    const latitude = Number(m[1]);
+    const longitude = Number(m[2]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude)
+      && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      return { latitude, longitude };
+    }
+  }
+  return null;
+}
+
+router.post('/admin/schools/resolve-google-maps', adminOnly, wrap(async (req, res) => {
+  const { url } = parse(googleMapsResolveSchema, req.body);
+  let parsed;
+  try { parsed = new URL(url); } catch { throw badRequest('Enter a valid Google Maps link.', 'invalid_maps_url'); }
+  const host = parsed.hostname.toLowerCase();
+  const allowed = host === 'maps.app.goo.gl' || host === 'goo.gl'
+    || host === 'google.com' || host === 'www.google.com' || host === 'maps.google.com';
+  if (!allowed) throw badRequest('Only Google Maps links are supported.', 'invalid_maps_host');
+
+  const direct = extractGoogleMapsCoordinates(url);
+  if (direct) return res.json({ ...direct, resolvedUrl: url });
+
+  let response;
+  try {
+    response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8000), headers: { 'User-Agent': 'Sapience-Team/1.0' } });
+  } catch {
+    throw badRequest('Could not resolve that Google Maps link. Enter latitude and longitude manually.', 'maps_resolve_failed');
+  }
+  const resolvedUrl = response.url || url;
+  const fromUrl = extractGoogleMapsCoordinates(resolvedUrl);
+  if (fromUrl) return res.json({ ...fromUrl, resolvedUrl });
+
+  let html = '';
+  try { html = await response.text(); } catch { /* final URL is enough when available */ }
+  const fromHtml = extractGoogleMapsCoordinates(html);
+  if (fromHtml) return res.json({ ...fromHtml, resolvedUrl });
+
+  throw badRequest('No coordinates were found in that Google Maps link. Enter latitude and longitude manually.', 'maps_coordinates_not_found');
+}));
+
 router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
   const f = parse(schoolSchema, req.body);
   const out = await tx(req.user, async (c) => {
@@ -1810,24 +1866,50 @@ router.get('/admin/employees/:id/dashboard', adminOnly, uuidParam('id'), wrap(as
         WHERE v.employee_id=$1 AND v.work_date BETWEEN $2::date AND $3::date
         ORDER BY v.work_date DESC, v.check_in_time DESC`, [req.params.id, from, to])).rows;
 
-    const tasks = (await c.query(
-      `SELECT task_id, task_code, title, work_date AS due_date, due_time,
-              outcome::text AS status, NULL::timestamptz AS started_at,
-              NULL::timestamptz AS submitted_at, NULL::timestamptz AS completed_at,
-              outcome::text AS effective_status
-         FROM task_daily_log l
-         JOIN tasks t ON t.task_id=l.task_id
-        WHERE l.employee_id=$1 AND l.work_date BETWEEN $2::date AND $3::date
-        UNION ALL
-       SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time, t.status::text AS status,
-              t.started_at, t.submitted_at, t.completed_at, t.effective_status::text AS effective_status
-         FROM v_tasks t
-        WHERE t.assigned_to=$1 AND t.due_date BETWEEN $2::date AND $3::date
-          AND NOT EXISTS (
-            SELECT 1 FROM task_daily_log l
-             WHERE l.task_id=t.task_id AND l.work_date=t.due_date
-          )
-        ORDER BY due_date DESC, due_time DESC`, [req.params.id, from, to])).rows;
+    // Dashboard task reporting must work even if a production database is
+    // one migration behind. Avoid depending on the v_tasks view here and
+    // explicitly cast enum values to text before UNIONing historical rows.
+    const hasTaskHistory = (await c.query(
+      `SELECT to_regclass('public.task_daily_log') IS NOT NULL AS present`
+    )).rows[0]?.present === true;
+
+    const taskSql = hasTaskHistory ? `
+      SELECT l.task_id, t.task_code, t.title, l.work_date AS due_date, t.due_time,
+             l.outcome::text AS status, NULL::timestamptz AS started_at,
+             NULL::timestamptz AS submitted_at, NULL::timestamptz AS completed_at,
+             l.outcome::text AS effective_status
+        FROM task_daily_log l
+        JOIN tasks t ON t.task_id=l.task_id
+       WHERE l.employee_id=$1 AND l.work_date BETWEEN $2::date AND $3::date
+      UNION ALL
+      SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time,
+             t.status::text AS status, t.started_at, t.submitted_at, t.completed_at,
+             CASE
+               WHEN t.status IN ('Completed','Submitted') THEN t.status::text
+               WHEN ((t.due_date + t.due_time) AT TIME ZONE 'Asia/Kolkata') < now() THEN 'Overdue'
+               ELSE t.status::text
+             END AS effective_status
+        FROM tasks t
+       WHERE t.assigned_to=$1 AND t.due_date BETWEEN $2::date AND $3::date
+         AND t.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM task_daily_log l
+            WHERE l.task_id=t.task_id AND l.work_date=t.due_date
+         )
+      ORDER BY due_date DESC, due_time DESC` : `
+      SELECT t.task_id, t.task_code, t.title, t.due_date, t.due_time,
+             t.status::text AS status, t.started_at, t.submitted_at, t.completed_at,
+             CASE
+               WHEN t.status IN ('Completed','Submitted') THEN t.status::text
+               WHEN ((t.due_date + t.due_time) AT TIME ZONE 'Asia/Kolkata') < now() THEN 'Overdue'
+               ELSE t.status::text
+             END AS effective_status
+        FROM tasks t
+       WHERE t.assigned_to=$1 AND t.due_date BETWEEN $2::date AND $3::date
+         AND t.deleted_at IS NULL
+       ORDER BY t.due_date DESC, t.due_time DESC`;
+
+    const tasks = (await c.query(taskSql, [req.params.id, from, to])).rows;
 
     const claims = (await c.query(
       `SELECT claim_id, claim_date, expense_type, category, amount_paise, place, location, note

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { newActionKey } from './api-client.js';
-import { SchoolMap, EvidenceMap, directionsUrl } from './SchoolMap.jsx';
+import { SchoolMap, EvidenceMap, directionsUrl, googleMapsUrl } from './SchoolMap.jsx';
 
 /**
  * Schools — the places trainers visit.
@@ -46,7 +46,7 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
   if (open) {
     return <SchoolDetail T={T} api={api} id={open} isPhone={isPhone}
       onBack={() => { setOpen(null); schools.reload(); }}
-      onEdit={(s) => setEditing(s)} useResource={useResource}
+      onEdit={(s) => { setEditing(s); setOpen(null); }} useResource={useResource}
       Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} Blank={Blank} M={M} />;
   }
 
@@ -215,7 +215,10 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
           </>
         ) : (
           <>
-            <M style={{ fontSize: 14 }}>{s.latitude}, {s.longitude}</M>
+            <a className="press" href={googleMapsUrl(s)} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 14, color: T.text, display: 'inline-block' }}>
+              Open location in Google Maps
+            </a>
             {s.location_set_at && (
               <M style={{ fontSize: 11, color: T.faint, display: 'block', marginTop: 6 }}>
                 confirmed {new Date(s.location_set_at).toLocaleDateString('en-IN',
@@ -554,7 +557,7 @@ function importSchoolHistoryTemplate(cells, current) {
   return {out,schoolName};
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone }) {
-  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false);
+  const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [commentPopup,setCommentPopup]=useState(null);
   const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
   useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
@@ -576,15 +579,35 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
               <span style={{color:T.text,whiteSpace:'pre-wrap',overflowWrap:'anywhere',flex:1}}>{x.name || '—'}{x.phone && <><span style={{color:T.mute}}> · </span><a className="press" href={`tel:${x.phone.replace(/[^+\d]/g,'')}`} aria-label={`Call ${x.label} ${x.phone}`} style={{color:T.text,textDecoration:'underline',textUnderlineOffset:3}}>{x.phone}</a></>}</span>
             </div>
           </div>)}
+        </div> : title==='Services' ? <div style={{display:'grid',gap:2}}>
+          {[
+            ['ATU 1','services.atu1','services.atu1Comments'],
+            ['SIM 1','services.sim1','services.sim1Comments'],
+            ['ATU 2','services.atu2','services.atu2Comments'],
+            ['SIM 2','services.sim2','services.sim2Comments'],
+            ['SIM 3','services.sim3','services.sim3Comments'],
+          ].map(([label,path,commentPath])=>{
+            const value=String(getPath(initial,path)).trim();
+            const comment=String(getPath(initial,commentPath)).trim();
+            if(!value && !comment)return null;
+            return <div key={path} style={{display:'grid',gridTemplateColumns:isPhone?'48% 52%':'190px 1fr',gap:isPhone?8:12,alignItems:'center',padding:'6px 0',fontSize:12,minWidth:0}}>
+              <span style={{color:T.faint,lineHeight:1.35}}>{label}</span>
+              <div style={{minWidth:0}}>
+                {comment ? <button type="button" className="press" onClick={()=>setCommentPopup({title:label,comment})} aria-label={`Open ${label} comments`} style={{display:'block',width:'100%',padding:0,border:0,background:'none',color:T.text,textAlign:'left',font:'inherit',cursor:'pointer',lineHeight:1.35,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{value || 'View comments'}</button> : <span style={{color:T.text,lineHeight:1.35,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',display:'block'}}>{value || '—'}</span>}
+              </div>
+            </div>;
+          })}
         </div> : <div style={{display:'grid',gap:2}}>
           {vals.map(([path,label,value])=>{
             const numeric=/^[+\-₹$€£]?\s*\d[\d,./%+\- ]*$/.test(value);
+            const isComment=/comments|remarks|appComments/i.test(label);
             return <div key={path} style={{display:'grid',gridTemplateColumns:isPhone?'48% 52%':'190px 1fr',gap:isPhone?8:12,alignItems:'start',padding:'6px 0',fontSize:isPhone?12:12,minWidth:0}}>
               <span style={{color:T.faint,lineHeight:1.35,overflowWrap:'anywhere'}}>{label}</span>
-              <span style={{color:T.text,lineHeight:1.35,whiteSpace:numeric?'nowrap':'pre-wrap',overflowWrap:'anywhere',textAlign:numeric?'right':'left',fontVariantNumeric:numeric?'tabular-nums':undefined}}>{value}</span>
+              <span style={{color:T.text,lineHeight:1.35,whiteSpace:numeric?'nowrap':'pre-wrap',overflowWrap:'anywhere',textAlign:numeric?'right':'left',fontVariantNumeric:numeric?'tabular-nums':undefined}}>{isComment && isPhone && value.length>120 ? <button type="button" className="press" onClick={()=>setCommentPopup({title:label,comment:value})} style={{display:'block',width:'100%',padding:0,border:0,background:'none',color:T.text,textAlign:'left',font:'inherit',cursor:'pointer',lineHeight:1.35,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{value}</button> : value}</span>
             </div>;
           })}
         </div>}
+      {commentPopup && <div className="fade" role="dialog" aria-modal="true" aria-label={`${commentPopup.title} comments`} onClick={()=>setCommentPopup(null)} style={{position:'fixed',inset:0,zIndex:120,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:420,maxHeight:isPhone?'70vh':'60vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:12,padding:16,boxSizing:'border-box',boxShadow:'0 12px 40px rgba(0,0,0,.18)'}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:10}}><div style={{fontSize:14,fontWeight:600}}>{commentPopup.title} — Comments</div><button type="button" className="press" onClick={()=>setCommentPopup(null)} aria-label="Close comments" style={{width:30,height:30,borderRadius:7,border:`1px solid ${T.line}`,background:'transparent',color:T.text,cursor:'pointer',fontSize:18}}>×</button></div><div style={{fontSize:13,lineHeight:1.55,color:T.text,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{commentPopup.comment}</div></div></div>}
       </div>
     })}
     {editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
@@ -594,6 +617,30 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
       {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}<div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
     </div></div>}
   </div>;
+}
+
+function parseGoogleMapsLocation(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  let text = raw;
+  try { text = decodeURIComponent(raw); } catch { /* keep original */ }
+  const patterns = [
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
+    /@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
+    /[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+    /\/place\/\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
+    /(^|[^\d])(-?\d{1,3}\.\d{4,})\s*,\s*(-?\d{1,3}\.\d{4,})(?!\d)/,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (!m) continue;
+    const latitude = Number(m[m.length - 2]);
+    const longitude = Number(m[m.length - 1]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      return { latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) };
+    }
+  }
+  return null;
 }
 
 function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
@@ -612,7 +659,35 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
+  const [resolvingMaps, setResolvingMaps] = useState(false);
+  const [manualLocation, setManualLocation] = useState(false);
+  const [mapsUrl, setMapsUrl] = useState(() => (school?.latitude !== null && school?.longitude !== null) ? `https://www.google.com/maps/search/?api=1&query=${school.latitude},${school.longitude}` : '');
   const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
+  const applyMapsLocation = async (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) { setMapsUrl(''); set({ latitude: '', longitude: '' }); return true; }
+    const parsed = parseGoogleMapsLocation(raw);
+    if (parsed) {
+      setMapsUrl(raw);
+      setF(prev => ({ ...prev, latitude: parsed.latitude, longitude: parsed.longitude }));
+      setProblem(null);
+      return true;
+    }
+    if (!/^https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl|(?:www\.)?google\.com|maps\.google\.com)\//i.test(raw)) {
+      setProblem(new Error('Paste a Google Maps link, or enter latitude and longitude manually.'));
+      return false;
+    }
+    setMapsUrl(raw); setResolvingMaps(true); setProblem(null);
+    try {
+      const result = await api.admin.resolveGoogleMaps(raw);
+      const coords = { latitude: Number(result.latitude).toFixed(6), longitude: Number(result.longitude).toFixed(6) };
+      setF(prev => ({ ...prev, ...coords }));
+      return true;
+    } catch (e) {
+      setProblem(e);
+      return false;
+    } finally { setResolvingMaps(false); }
+  };
 
   const lat = Number(f.latitude), lng = Number(f.longitude), radius = Number(f.radiusMetres);
   // Coordinates are optional: a school is usually known before anyone has
@@ -717,24 +792,56 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
             placeholder="Optional" className="mono" style={field} />
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 8 }}>
-          <div>
-            <div className="mono" style={label}>Latitude (optional)</div>
-            <input value={f.latitude} onChange={(e) => set({ latitude: e.target.value })}
-              placeholder="13.082700" className="mono" style={latOk || f.latitude === '' ? field : bad} />
-          </div>
-          <div>
-            <div className="mono" style={label}>Longitude (optional)</div>
-            <input value={f.longitude} onChange={(e) => set({ longitude: e.target.value })}
-              placeholder="80.270700" className="mono" style={lngOk || f.longitude === '' ? field : bad} />
-          </div>
-        </div>
-        {/* Coordinates decide whether a real trainer can punch in, so this
-            says plainly where they must come from. Nothing is guessed. */}
-        <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 24 }}>
-          {blank
-            ? 'Leave these blank if you do not have them yet. The school will be saved, but nobody can punch in there until a position is confirmed.'
-            : 'Stand at the school, long-press your position in Google Maps, and copy the two numbers it shows. Do not estimate: a wrong coordinate means nobody can punch in there.'}
+        <div style={{ marginBottom: 12 }}>
+          <div className="mono" style={label}>Location</div>
+          {!manualLocation ? <>
+            <input
+              value={mapsUrl}
+              onChange={(e) => {
+                const value = e.target.value;
+                setMapsUrl(value);
+                if (!value.trim()) set({ latitude: '', longitude: '' });
+                else if (parseGoogleMapsLocation(value)) applyMapsLocation(value);
+              }}
+              onBlur={() => { if (mapsUrl.trim()) applyMapsLocation(mapsUrl); }}
+              onPaste={(e) => {
+                const value = e.clipboardData?.getData('text') || '';
+                setMapsUrl(value);
+                if (parseGoogleMapsLocation(value)) { e.preventDefault(); applyMapsLocation(value); }
+                else setTimeout(() => applyMapsLocation(value), 0);
+              }}
+              disabled={resolvingMaps}
+              placeholder="Paste Google Maps link here"
+              style={field}
+            />
+            <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginTop: 8 }}>
+              {resolvingMaps ? 'Resolving Google Maps link…' : 'Paste a Google Maps link, including maps.app.goo.gl short links.'}
+            </div>
+            <button type="button" className="press" onClick={() => { setManualLocation(true); setMapsUrl(''); }}
+              style={{ marginTop: 10, padding: 0, border: 0, background: 'none', color: T.text, textDecoration: 'underline', cursor: 'pointer', font: 'inherit', fontSize: 12 }}>
+              Enter latitude and longitude manually instead
+            </button>
+          </> : <>
+            <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16 }}>
+              <div>
+                <div style={{ fontSize: 11, color: T.mute, marginBottom: 5 }}>Latitude</div>
+                <input value={f.latitude} onChange={(e) => set({ latitude: e.target.value })} placeholder="13.119008" inputMode="decimal" style={field} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: T.mute, marginBottom: 5 }}>Longitude</div>
+                <input value={f.longitude} onChange={(e) => set({ longitude: e.target.value })} placeholder="80.261181" inputMode="decimal" style={field} />
+              </div>
+            </div>
+            <button type="button" className="press" onClick={() => setManualLocation(false)}
+              style={{ marginTop: 10, padding: 0, border: 0, background: 'none', color: T.text, textDecoration: 'underline', cursor: 'pointer', font: 'inherit', fontSize: 12 }}>
+              Use Google Maps link instead
+            </button>
+          </>}
+          {f.latitude !== '' && f.longitude !== '' && (
+            <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>
+              Position: {f.latitude}, {f.longitude}
+            </div>
+          )}
         </div>
 
         {editing && (
