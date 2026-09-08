@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, createContext, useContext, use
 import { createClient, ApiError, readFix, newActionKey } from './api-client.js';
 import { LatCard, LatScreen, AdminLat } from './Lat.jsx';
 import { BroadcastCard, BroadcastList, AdminBroadcasts } from './Broadcast.jsx';
-import { AdminSchools, EmployeeSchools } from './Schools.jsx';
+import { AdminSchools } from './Schools.jsx';
 import { PunchPanel } from './Punch.jsx';
 
 /* ═══════════════════════════════════════════════════════════════ tokens */
@@ -411,7 +411,7 @@ function Employee({ me, onOut, theme, setTheme }) {
   useEffect(() => { const id = setInterval(() => notifications.reload(), 60000); return () => clearInterval(id); }, [notifications.reload]);
 
   const nav = [
-    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['schools', 'Schools'], ['lat', 'LAT'],
+    ['home', 'Home'], ['tasks', 'Tasks'], ['attendance', 'Attendance'], ['lat', 'LAT'],
     ['contributions', 'Contributions'], ['workdone', 'Work Done'],
     ...(profile.data?.claims_enabled ? [['claims', 'Claims']] : []),
     ['profile', 'Profile'],
@@ -438,8 +438,6 @@ function Employee({ me, onOut, theme, setTheme }) {
             onOpenLat={() => setLatOpen(true)} broadcasts={broadcasts} onOpenNews={() => setNewsOpen(true)} />
           : tab === 'tasks' ? <ETasks onOpenTask={setOpenTask} />
             : tab === 'attendance' ? <EAttendance profile={profile} />
-              : tab === 'schools' ? <EmployeeSchools T={T} api={api} isPhone={isPhone} useResource={useResource}
-                  Btn={Btn} ErrorBlock={ErrorBlock} Rows={Rows} Blank={Blank} M={M} />
               : tab === 'lat' ? <ELat lat={lat} onOpen={() => setLatOpen(true)} />
                 : tab === 'claims' ? <EClaims profile={profile} />
                 : tab === 'contributions' ? <EContributions />
@@ -848,7 +846,7 @@ function EAttendance({ profile }) {
     <div style={{ padding: '32px 24px 0' }}>
       <h1 className="tight" style={{ fontSize: 20, fontWeight: 600, margin: '0 0 32px' }}>Attendance</h1>
       <div style={{ fontSize: 12, color: T.mute, marginBottom: 24 }}>
-        {profile.data ? ((profile.data.role === 'Trainer' || profile.data.role === 'Technical Support') ? 'Punch in/out from any location' : `${profile.data.site_name}, ${profile.data.radius_metres} m radius`) : ''}
+        {profile.data ? ((profile.data.role === 'Trainer' || profile.data.role === 'Technical Support' || profile.data.role === 'Admin Support') ? 'Punch in/out from any location' : `${profile.data.site_name}, ${profile.data.radius_metres} m radius`) : ''}
       </div>
       <Eyebrow>History</Eyebrow>
       {history.loading ? <Rows n={5} />
@@ -862,7 +860,7 @@ function EAttendance({ profile }) {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {/* Type, place and zone as the server recorded them. */}
                       <div style={{ fontSize: 13 }}>
-                        {a.location_type === 'SCHOOL' ? 'School' : a.location_type === 'OFFICE' ? 'Office' : (a.role === 'Trainer' || a.role === 'Technical Support') ? 'Field' : '—'}
+                        {a.location_type === 'SCHOOL' ? 'School' : a.location_type === 'OFFICE' ? 'Office' : (a.role === 'Trainer' || a.role === 'Technical Support' || a.role === 'Admin Support') ? 'Field' : '—'}
                         {a.site_name ? ` · ${a.site_name}` : ''}
                       </div>
                       {a.site_zone && (
@@ -1656,7 +1654,7 @@ function AAttendance({ isPhone }) {
                     <div style={{ fontSize: 14, fontWeight: 500 }}>{r.employee_name}</div>
                     <div style={{ fontSize: 12, color: T.mute, marginTop: 3 }}>
                       {r.check_in_time
-                        ? `${r.location_type === 'SCHOOL' ? 'School' : r.location_type === 'OFFICE' ? 'Office' : (r.role === 'Trainer' || r.role === 'Technical Support') ? 'Field' : '—'} · ${r.site_name || ((r.role === 'Trainer' || r.role === 'Technical Support') ? 'Any location' : '—')}${r.site_zone ? ` · ${r.site_zone}` : ''}`
+                        ? `${r.location_type === 'SCHOOL' ? 'School' : r.location_type === 'OFFICE' ? 'Office' : (r.role === 'Trainer' || r.role === 'Technical Support' || r.role === 'Admin Support') ? 'Field' : '—'} · ${r.site_name || ((r.role === 'Trainer' || r.role === 'Technical Support' || r.role === 'Admin Support') ? 'Any location' : '—')}${r.site_zone ? ` · ${r.site_zone}` : ''}`
                         : r.role}
                     </div>
                     {r.attendance_sessions > 0 && <M style={{ fontSize: 10, color: T.faint, display: 'block', marginTop: 4 }}>
@@ -2288,7 +2286,7 @@ function EditEmployee({ employee, onClose, onDone, isPhone }) {
           <button className="press" onClick={onClose} style={{ background: 'none', border: 'none', color: T.faint, cursor: 'pointer', fontSize: 16 }}>×</button>
         </div>
         <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Name</div><input value={f.name} onChange={e => set({name:e.target.value})} style={field} /></div>
-        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Role</div><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{['Trainer','Technical Support','Admin','Accountant','Content Writer','Designer','CEO'].map(r => <button key={r} className="press" onClick={() => set({role:r})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.role===r?T.text:'transparent',color:f.role===r?T.bg:T.mute,border:`1px solid ${f.role===r?T.text:T.line}`}}>{r}</button>)}</div></div>
+        <div style={{ marginBottom: 18 }}><div className="mono" style={label}>Role</div><div style={{display:'flex',flexWrap:'wrap',gap:8}}>{['Trainer','Technical Support','Admin Support','Admin','Accountant','Content Writer','Designer','CEO'].map(r => <button key={r} className="press" onClick={() => set({role:r})} style={{padding:'8px 12px',borderRadius:8,fontSize:12,cursor:'pointer',background:f.role===r?T.text:'transparent',color:f.role===r?T.bg:T.mute,border:`1px solid ${f.role===r?T.text:T.line}`}}>{r}</button>)}</div></div>
         <div style={{ display:'grid', gridTemplateColumns:isPhone?'1fr':'1fr 1fr', gap:16, marginBottom:18 }}>
           <div><div className="mono" style={label}>Email</div><input type="email" value={f.email} onChange={e => set({email:e.target.value})} style={field} /></div>
           <div><div className="mono" style={label}>Phone</div><input value={f.phone} onChange={e => set({phone:e.target.value})} style={field} /></div>
@@ -2395,7 +2393,7 @@ function AddEmployee({ onClose, onDone, isPhone }) {
             <div style={{ marginBottom: 20 }}>
               <div className="mono" style={label}>Role</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer'].map((r) => {
+                {['Trainer', 'Technical Support', 'Admin Support', 'Admin', 'Accountant', 'Content Writer', 'Designer'].map((r) => {
                   const on = f.role === r;
                   return (
                     <button key={r} className="press" onClick={() => set({ role: r })} style={{
@@ -2407,7 +2405,7 @@ function AddEmployee({ onClose, onDone, isPhone }) {
                 })}
               </div>
               <div style={{ fontSize: 12, color: T.faint, marginTop: 8 }}>
-                Trainers and Technical Support can punch in/out from any location. Trainers also record school visit check-in/out at assigned schools.
+                Trainers and Technical Support can punch in/out from any location and record assigned-school visits. Admin Support can punch in/out from any location for field work.
               </div>
             </div>
 

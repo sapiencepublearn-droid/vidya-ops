@@ -59,8 +59,8 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
   const [reported, setReported] = useState(false);
   const [endDayOpen, setEndDayOpen] = useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
-  const fieldRole = role === 'Trainer' || role === 'Technical Support';
-  const isTrainer = role === 'Trainer';
+  const fieldRole = role === 'Trainer' || role === 'Technical Support' || role === 'Admin Support';
+  const isSchoolVisitRole = role === 'Trainer' || role === 'Technical Support';
   // Held across retries of one tap, so a lost response cannot double-punch.
   const actionKey = useRef(null);
   const endDayActionKey = useRef(null);
@@ -192,7 +192,7 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
           {att.status}{att.check_in_accuracy ? ` · ±${att.check_in_accuracy} m` : ''}
         </M>
 
-        {isTrainer && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
+        {isSchoolVisitRole && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
         <BigButton T={T} busy={busy} stage={stage} onClick={openEndDay}
           label="End Day" variant="line" />
         <Problem T={T} problem={problem} reported={reported} reporting={reporting}
@@ -208,7 +208,7 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
       <div className="mono" style={label}>Attendance</div>
       <div className="tight" style={{ fontSize: 22, fontWeight: 600, marginBottom: 6 }}>Not punched in</div>
       <div style={{ fontSize: 13, color: T.mute, marginBottom: 20, lineHeight: 1.6 }}>
-        Press Punch In. Your GPS is recorded, but Trainers and Technical Support are not restricted to a designated punch location.
+        Press Punch In. Your GPS is recorded, but Trainers, Technical Support, and Admin Support are not restricted to a designated punch location.
       </div>
       <BigButton T={T} busy={busy} stage={stage} onClick={() => punch('in')}
         label="Punch In" variant="accent" />
@@ -341,7 +341,7 @@ function SchoolVisitPanel({ T, api, M, Btn }) {
         </>
       ) : (
         <>
-          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>Only schools assigned to you are shown here. Select your assigned school and check in. Check out when you leave the school.</div>
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>At the assigned school, select it and check in. Check out when you leave the school.</div>
           <div style={{ position: 'relative', marginBottom: 10 }}>
             <input value={schoolQuery} disabled={busy} onChange={(e) => { setSchoolQuery(e.target.value); setSchoolId(''); }}
               placeholder="Type school name…" autoComplete="off"

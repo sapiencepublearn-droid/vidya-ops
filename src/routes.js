@@ -61,7 +61,7 @@ const claimSchema = z.object({
 
 const employeeSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  role: z.enum(['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
+  role: z.enum(['Trainer', 'Technical Support', 'Admin Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
   email: z.string().email().max(160),
   phone: z.string().trim().max(30).optional(),
   password: z.string(),
@@ -85,7 +85,7 @@ const contributionReplySchema = z.object({
 
 const employeeUpdateSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  role: z.enum(['Trainer', 'Technical Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
+  role: z.enum(['Trainer', 'Technical Support', 'Admin Support', 'Admin', 'Accountant', 'Content Writer', 'Designer', 'CEO']),
   email: z.string().email().max(160),
   phone: z.string().trim().max(30).optional().nullable(),
   status: z.enum(['Active', 'Inactive']).default('Active'),
@@ -175,13 +175,9 @@ function validateOpenFix(fix) {
   }
   return fix;
 }
-// Field punch validation for exactly two roles: Trainer and Technical Support.
-// What still applies: fixSchema has already validated the GPS shape, and this
-// function rejects mock-location signals. What intentionally does NOT apply
-// here: maxAccuracyMetres and office/school geofence matching. The caller still
-// records the GPS evidence, but check-in/check-out/end-day are accepted anywhere.
-// School visit check-in/out is separate and continues to use validateOpenFix plus
-// permittedSites/verifyFix, so the school gate still requires an accurate fix.
+// Trainers and Technical Support may punch from anywhere. Their GPS is still
+// recorded as evidence, but low accuracy must not turn an anywhere punch into
+// a geofence failure. School visit check-in/out continues to require accurate GPS.
 function validateFieldFix(fix) {
   if (fix.isMocked) {
     throw unprocessable('This device is reporting a mock location. Turn off the mock location app and try again.', 'mock_location');
@@ -280,7 +276,7 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
   const emp = (await tx(req.user, (c) => c.query(
     `SELECT role, shift_start, late_grace_minutes FROM employees WHERE employee_id = $1`,
     [req.user.id]))).rows[0];
-  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
+  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support' || emp.role === 'Admin Support';
   const cleanFix = anywhere ? validateFieldFix(fix) : validateOpenFix(fix);
   const sites = anywhere ? [] : await permittedSites(req.user);
   const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
@@ -292,7 +288,7 @@ router.post('/attendance/check-in', idempotent(wrap(async (req, res) => {
       `SELECT (now() AT TIME ZONE 'Asia/Kolkata')::time > ($1::time + make_interval(mins => $2)) AS late`,
       [emp.shift_start, emp.late_grace_minutes])).rows[0].late;
 
-    const status = (emp.role === 'Trainer' || emp.role === 'Technical Support') ? 'Field Work' : late ? 'Late' : 'Present';
+    const status = (emp.role === 'Trainer' || emp.role === 'Technical Support' || emp.role === 'Admin Support') ? 'Field Work' : late ? 'Late' : 'Present';
 
     // One employee may have several closed sessions on the same business day,
     // but never more than one active session. The partial unique index enforces
@@ -337,14 +333,14 @@ router.post('/attendance/check-out', idempotent(wrap(async (req, res) => {
   const fix = parse(fixSchema, req.body);
   const emp = (await tx(req.user, (c) => c.query(
     `SELECT role FROM employees WHERE employee_id = $1`, [req.user.id]))).rows[0];
-  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
+  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support' || emp.role === 'Admin Support';
   const cleanFix = anywhere ? validateFieldFix(fix) : validateOpenFix(fix);
   const sites = anywhere ? [] : await permittedSites(req.user);
   const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
   const { site, distance } = matched;
 
   const row = await tx(req.user, async (c) => {
-    if (emp.role === 'Trainer') {
+    if (emp.role === 'Trainer' || emp.role === 'Technical Support') {
       const openVisit = (await c.query(
         `SELECT visit_id FROM school_visits WHERE employee_id=$1 AND work_date=ist_today() AND check_in_time IS NOT NULL AND check_out_time IS NULL LIMIT 1`,
         [req.user.id])).rows[0];
@@ -410,7 +406,7 @@ function buildVisitDraft({ school, zone, checkIn, checkOut }) {
 router.get('/attendance/school-visits/today', wrap(async (req, res) => {
   const emp = (await tx(req.user, (c) => c.query(
     `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
-  if (emp.role !== 'Trainer') return res.json({ schools: [], active: null, visits: [] });
+  if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') return res.json({ schools: [], active: null, visits: [] });
 
   const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
   const { rows } = await tx(req.user, (c) => c.query(
@@ -428,7 +424,7 @@ router.get('/attendance/school-visits/today', wrap(async (req, res) => {
 router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, res) => {
   const f = parse(fixSchema.extend({ locationId: uuid }).strict(), req.body);
   const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
-  if (emp.role !== 'Trainer') throw forbidden('School visits are available only to trainers.');
+  if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') throw forbidden('School visits are available only to trainers and technical support.');
   const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
   const site = sites.find((s) => s.id === f.locationId);
   if (!site) throw forbidden('That school is not assigned to you today.', 'school_not_assigned');
@@ -455,7 +451,7 @@ router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, re
 router.post('/attendance/school-visits/check-out', idempotent(wrap(async (req, res) => {
   const f = parse(fixSchema.extend({ visitId: uuid }).strict(), req.body);
   const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
-  if (emp.role !== 'Trainer') throw forbidden('School visits are available only to trainers.');
+  if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') throw forbidden('School visits are available only to trainers and technical support.');
   const clean = validateOpenFix(f);
   const row = await tx(req.user, async (c) => {
     const cur = (await c.query(
@@ -1098,14 +1094,14 @@ router.post('/attendance/end-day', idempotent(wrap(async (req, res) => {
     `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
   if (!emp) throw notFound('Your employee account does not exist.');
 
-  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support';
+  const anywhere = emp.role === 'Trainer' || emp.role === 'Technical Support' || emp.role === 'Admin Support';
   const cleanFix = anywhere ? validateFieldFix(f) : validateOpenFix(f);
   const sites = anywhere ? [] : await permittedSites(req.user);
   const matched = anywhere ? { site: null, distance: null } : verifyFix(sites, cleanFix);
   const { site, distance } = matched;
 
   const out = await tx(req.user, async (c) => {
-    if (emp.role === 'Trainer') {
+    if (emp.role === 'Trainer' || emp.role === 'Technical Support') {
       const openVisit = (await c.query(
         `SELECT visit_id FROM school_visits
           WHERE employee_id=$1 AND work_date=ist_today()
