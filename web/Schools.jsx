@@ -225,10 +225,6 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
                   { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' })}
               </M>
             )}
-            <a className="press" href={directionsUrl(s, null)} target="_blank" rel="noopener noreferrer"
-              style={{ fontSize: 13, color: T.text, display: 'inline-block', marginTop: 10 }}>
-              Get Directions
-            </a>
           </>
         )}
       </div>
@@ -775,32 +771,73 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
             placeholder="Optional" className="mono" style={field} />
         </div>
 
-        <div style={{ marginBottom: 8 }}>
-          <div className="mono" style={label}>Google Maps location</div>
+        <div style={{ marginBottom: 20 }}>
+          <div className="mono" style={label}>Location</div>
           <input
             value={mapsUrl}
             onChange={(e) => {
               const value = e.target.value;
               setMapsUrl(value);
-              if (!value.trim()) set({ latitude: '', longitude: '' });
-              else applyMapsLocation(value);
+              if (!value.trim()) {
+                set({ latitude: '', longitude: '' });
+                return;
+              }
+              if (!applyMapsLocation(value)) set({ latitude: '', longitude: '' });
             }}
             onPaste={(e) => {
               const value = e.clipboardData?.getData('text') || '';
-              setMapsUrl(value);
               if (applyMapsLocation(value)) e.preventDefault();
+              else {
+                setMapsUrl(value);
+                set({ latitude: '', longitude: '' });
+              }
             }}
-            placeholder="Paste Google Maps link here"
+            placeholder="Paste Google Maps link (optional)"
             style={field}
           />
-          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginTop: 8 }}>
-            Paste the Google Maps link. The school latitude and longitude are extracted automatically; you do not need to type coordinates.
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginTop: 7 }}>
+            Paste a Google Maps link to fill the coordinates automatically.
           </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0', color: T.faint, fontSize: 12 }}>
+            <span style={{ flex: 1, height: 1, background: T.line }} />
+            <span>OR ENTER MANUALLY</span>
+            <span style={{ flex: 1, height: 1, background: T.line }} />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 12 }}>
+            <div>
+              <div className="mono" style={label}>Latitude</div>
+              <input
+                value={f.latitude}
+                onChange={(e) => { setMapsUrl(''); set({ latitude: e.target.value }); }}
+                placeholder="13.119008"
+                inputMode="decimal"
+                style={latOk ? field : bad}
+              />
+            </div>
+            <div>
+              <div className="mono" style={label}>Longitude</div>
+              <input
+                value={f.longitude}
+                onChange={(e) => { setMapsUrl(''); set({ longitude: e.target.value }); }}
+                placeholder="80.261181"
+                inputMode="decimal"
+                style={lngOk ? field : bad}
+              />
+            </div>
+          </div>
+
           {f.latitude !== '' && f.longitude !== '' && (
             <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>
               Position: {f.latitude}, {f.longitude}
             </div>
           )}
+          {!latOk || !lngOk ? (
+            <div style={{ fontSize: 12, color: T.accent, marginTop: 7 }}>
+              Enter both latitude and longitude, or clear both fields.
+            </div>
+          ) : null}
         </div>
 
         {editing && (
