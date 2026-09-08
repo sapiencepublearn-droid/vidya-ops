@@ -220,6 +220,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       returnWork: (id, reason, key) => request(`/admin/submissions/${id}/return`, { method: 'POST', body: { reason }, idempotencyKey: key }),
       audit: () => request('/admin/audit'),
       attendance: (date) => request(`/admin/attendance${date ? `?date=${date}` : ''}`),
+      resolveGoogleMaps: (url) => request('/admin/schools/resolve-google-maps', { method: 'POST', body: { url } }),
       createSchool: (body, key) => request('/admin/schools', { method: 'POST', body, idempotencyKey: key }),
       updateSchool: (id, body, key) => request(`/admin/schools/${id}`, { method: 'PATCH', body, idempotencyKey: key }),
       updateSchoolHistory: (id, body, key) => request(`/admin/schools/${id}/history`, { method: 'PUT', body, idempotencyKey: key }),

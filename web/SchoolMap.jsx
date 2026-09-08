@@ -24,7 +24,7 @@ export function googleMapsUrl(school) {
 }
 
 export function directionsUrl(school, from) {
-  if (school.latitude === null || school.longitude === null) return null;
+  if (!school || school.latitude === null || school.longitude === null || school.latitude === undefined || school.longitude === undefined) return null;
   const params = new URLSearchParams({
     api: '1',
     destination: `${school.latitude},${school.longitude}`,
@@ -36,7 +36,7 @@ export function directionsUrl(school, from) {
   return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
-const hasCoords = (s) => s.latitude !== null && s.longitude !== null;
+const hasCoords = (s) => Boolean(s) && s.latitude !== null && s.longitude !== null && s.latitude !== undefined && s.longitude !== undefined;
 
 export function SchoolMap({ T, schools, isPhone, onViewDetails, onClose }) {
   const [me, setMe] = useState(null);

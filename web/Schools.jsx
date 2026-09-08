@@ -225,6 +225,10 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
                   { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric' })}
               </M>
             )}
+            <a className="press" href={directionsUrl(s, null)} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 13, color: T.text, display: 'inline-block', marginTop: 10 }}>
+              Get Directions
+            </a>
           </>
         )}
       </div>
@@ -621,6 +625,7 @@ function parseGoogleMapsLocation(value) {
   let text = raw;
   try { text = decodeURIComponent(raw); } catch { /* keep original */ }
   const patterns = [
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
     /@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/,
     /[?&](?:q|query|ll|destination)=\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
     /\/place\/\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i,
@@ -629,10 +634,10 @@ function parseGoogleMapsLocation(value) {
   for (const re of patterns) {
     const m = text.match(re);
     if (!m) continue;
-    const lat = Number(m[m.length - 2]);
-    const lng = Number(m[m.length - 1]);
-    if (Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      return { latitude: lat.toFixed(6), longitude: lng.toFixed(6) };
+    const latitude = Number(m[m.length - 2]);
+    const longitude = Number(m[m.length - 1]);
+    if (Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
+      return { latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) };
     }
   }
   return null;
@@ -654,10 +659,13 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   });
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState(null);
+  const [resolvingMaps, setResolvingMaps] = useState(false);
+  const [manualLocation, setManualLocation] = useState(false);
   const [mapsUrl, setMapsUrl] = useState(() => (school?.latitude !== null && school?.longitude !== null) ? `https://www.google.com/maps/search/?api=1&query=${school.latitude},${school.longitude}` : '');
   const set = (patch) => { setF({ ...f, ...patch }); setProblem(null); };
-  const applyMapsLocation = (value) => {
-    const raw = String(value || '');
+  const applyMapsLocation = async (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) { setMapsUrl(''); set({ latitude: '', longitude: '' }); return true; }
     const parsed = parseGoogleMapsLocation(raw);
     if (parsed) {
       setMapsUrl(raw);
@@ -665,7 +673,20 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
       setProblem(null);
       return true;
     }
-    return false;
+    if (!/^https?:\/\/(?:maps\.app\.goo\.gl|goo\.gl|(?:www\.)?google\.com|maps\.google\.com)\//i.test(raw)) {
+      setProblem(new Error('Paste a Google Maps link, or enter latitude and longitude manually.'));
+      return false;
+    }
+    setMapsUrl(raw); setResolvingMaps(true); setProblem(null);
+    try {
+      const result = await api.admin.resolveGoogleMaps(raw);
+      const coords = { latitude: Number(result.latitude).toFixed(6), longitude: Number(result.longitude).toFixed(6) };
+      setF(prev => ({ ...prev, ...coords }));
+      return true;
+    } catch (e) {
+      setProblem(e);
+      return false;
+    } finally { setResolvingMaps(false); }
   };
 
   const lat = Number(f.latitude), lng = Number(f.longitude), radius = Number(f.radiusMetres);
@@ -771,73 +792,56 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
             placeholder="Optional" className="mono" style={field} />
         </div>
 
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 12 }}>
           <div className="mono" style={label}>Location</div>
-          <input
-            value={mapsUrl}
-            onChange={(e) => {
-              const value = e.target.value;
-              setMapsUrl(value);
-              if (!value.trim()) {
-                set({ latitude: '', longitude: '' });
-                return;
-              }
-              if (!applyMapsLocation(value)) set({ latitude: '', longitude: '' });
-            }}
-            onPaste={(e) => {
-              const value = e.clipboardData?.getData('text') || '';
-              if (applyMapsLocation(value)) e.preventDefault();
-              else {
+          {!manualLocation ? <>
+            <input
+              value={mapsUrl}
+              onChange={(e) => {
+                const value = e.target.value;
                 setMapsUrl(value);
-                set({ latitude: '', longitude: '' });
-              }
-            }}
-            placeholder="Paste Google Maps link (optional)"
-            style={field}
-          />
-          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginTop: 7 }}>
-            Paste a Google Maps link to fill the coordinates automatically.
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0', color: T.faint, fontSize: 12 }}>
-            <span style={{ flex: 1, height: 1, background: T.line }} />
-            <span>OR ENTER MANUALLY</span>
-            <span style={{ flex: 1, height: 1, background: T.line }} />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 12 }}>
-            <div>
-              <div className="mono" style={label}>Latitude</div>
-              <input
-                value={f.latitude}
-                onChange={(e) => { setMapsUrl(''); set({ latitude: e.target.value }); }}
-                placeholder="13.119008"
-                inputMode="decimal"
-                style={latOk ? field : bad}
-              />
+                if (!value.trim()) set({ latitude: '', longitude: '' });
+                else if (parseGoogleMapsLocation(value)) applyMapsLocation(value);
+              }}
+              onBlur={() => { if (mapsUrl.trim()) applyMapsLocation(mapsUrl); }}
+              onPaste={(e) => {
+                const value = e.clipboardData?.getData('text') || '';
+                setMapsUrl(value);
+                if (parseGoogleMapsLocation(value)) { e.preventDefault(); applyMapsLocation(value); }
+                else setTimeout(() => applyMapsLocation(value), 0);
+              }}
+              disabled={resolvingMaps}
+              placeholder="Paste Google Maps link here"
+              style={field}
+            />
+            <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginTop: 8 }}>
+              {resolvingMaps ? 'Resolving Google Maps link…' : 'Paste a Google Maps link, including maps.app.goo.gl short links.'}
             </div>
-            <div>
-              <div className="mono" style={label}>Longitude</div>
-              <input
-                value={f.longitude}
-                onChange={(e) => { setMapsUrl(''); set({ longitude: e.target.value }); }}
-                placeholder="80.261181"
-                inputMode="decimal"
-                style={lngOk ? field : bad}
-              />
+            <button type="button" className="press" onClick={() => { setManualLocation(true); setMapsUrl(''); }}
+              style={{ marginTop: 10, padding: 0, border: 0, background: 'none', color: T.text, textDecoration: 'underline', cursor: 'pointer', font: 'inherit', fontSize: 12 }}>
+              Enter latitude and longitude manually instead
+            </button>
+          </> : <>
+            <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16 }}>
+              <div>
+                <div style={{ fontSize: 11, color: T.mute, marginBottom: 5 }}>Latitude</div>
+                <input value={f.latitude} onChange={(e) => set({ latitude: e.target.value })} placeholder="13.119008" inputMode="decimal" style={field} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: T.mute, marginBottom: 5 }}>Longitude</div>
+                <input value={f.longitude} onChange={(e) => set({ longitude: e.target.value })} placeholder="80.261181" inputMode="decimal" style={field} />
+              </div>
             </div>
-          </div>
-
+            <button type="button" className="press" onClick={() => setManualLocation(false)}
+              style={{ marginTop: 10, padding: 0, border: 0, background: 'none', color: T.text, textDecoration: 'underline', cursor: 'pointer', font: 'inherit', fontSize: 12 }}>
+              Use Google Maps link instead
+            </button>
+          </>}
           {f.latitude !== '' && f.longitude !== '' && (
             <div className="mono" style={{ fontSize: 11, color: T.faint, marginTop: 8 }}>
               Position: {f.latitude}, {f.longitude}
             </div>
           )}
-          {!latOk || !lngOk ? (
-            <div style={{ fontSize: 12, color: T.accent, marginTop: 7 }}>
-              Enter both latitude and longitude, or clear both fields.
-            </div>
-          ) : null}
         </div>
 
         {editing && (
