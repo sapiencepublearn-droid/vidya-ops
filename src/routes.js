@@ -97,7 +97,7 @@ const employeeUpdateSchema = z.object({
 
 
 const page = (q) => ({
-  limit: Math.min(Math.max(Number(q.limit) || 50, 1), 500),
+  limit: Math.min(Math.max(Number(q.limit) || 50, 1), 200),
   offset: Math.max(Number(q.offset) || 0, 0),
 });
 
@@ -209,6 +209,18 @@ async function permittedSites(actor) {
     id: r.location_id, kind: r.kind, name: r.name, zone: r.zone,
     lat: Number(r.latitude), lng: Number(r.longitude), radius: r.radius_metres,
   }));
+}
+
+async function schoolVisitSites(actor, role) {
+  if (role === 'Technical Support') {
+    const { rows } = await tx(actor, (c) => c.query(
+      `SELECT location_id, kind, name, zone, latitude, longitude, radius_metres
+         FROM locations
+        WHERE kind='school' AND is_active AND latitude IS NOT NULL AND longitude IS NOT NULL
+        ORDER BY zone, name`));
+    return rows.map((r) => ({ id:r.location_id, kind:r.kind, name:r.name, zone:r.zone, lat:Number(r.latitude), lng:Number(r.longitude), radius:r.radius_metres }));
+  }
+  return (await permittedSites(actor)).filter((s) => s.kind === 'school');
 }
 
 /**
@@ -408,20 +420,7 @@ router.get('/attendance/school-visits/today', wrap(async (req, res) => {
     `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
   if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') return res.json({ schools: [], active: null, visits: [] });
 
-  // Trainers remain assignment-restricted. Technical Support can visit any
-  // active, geocoded school from the School Master. This is a visit
-  // authorization rule only; the normal attendance punch remains unchanged.
-  const sites = emp.role === 'Technical Support'
-    ? (await tx(req.user, (c) => c.query(
-        `SELECT location_id, kind, name, zone, latitude, longitude, radius_metres
-           FROM locations
-          WHERE kind='school' AND is_active AND latitude IS NOT NULL AND longitude IS NOT NULL
-          ORDER BY zone, name`)).then(r => r.rows.map(s => ({
-            id: s.location_id, kind: s.kind, name: s.name, zone: s.zone,
-            lat: Number(s.latitude), lng: Number(s.longitude), radius: s.radius_metres,
-          })))
-      )
-    : (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const sites = await schoolVisitSites(req.user, emp.role);
   const { rows } = await tx(req.user, (c) => c.query(
     `SELECT v.*, l.name AS school_name, l.zone AS school_zone
        FROM school_visits v JOIN locations l ON l.location_id=v.location_id
@@ -438,21 +437,9 @@ router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, re
   const f = parse(fixSchema.extend({ locationId: uuid }).strict(), req.body);
   const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
   if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') throw forbidden('School visits are available only to trainers and technical support.');
-  // Trainers keep the existing assignment restriction. Technical Support
-  // can choose any active school that has a confirmed position.
-  const sites = emp.role === 'Technical Support'
-    ? (await tx(req.user, (c) => c.query(
-        `SELECT location_id, kind, name, zone, latitude, longitude, radius_metres
-           FROM locations
-          WHERE kind='school' AND is_active AND latitude IS NOT NULL AND longitude IS NOT NULL`
-      ))).rows.map(s => ({ id:s.location_id, kind:s.kind, name:s.name, zone:s.zone, lat:Number(s.latitude), lng:Number(s.longitude), radius:s.radius_metres }))
-    : (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const sites = await schoolVisitSites(req.user, emp.role);
   const site = sites.find((s) => s.id === f.locationId);
-  if (!site) throw forbidden(
-    emp.role === 'Technical Support'
-      ? 'That school is not active or does not have a confirmed location.'
-      : 'That school is not assigned to you today.',
-    emp.role === 'Technical Support' ? 'school_unavailable' : 'school_not_assigned');
+  if (!site) throw forbidden(emp.role === 'Technical Support' ? 'That school is not available for a school visit.' : 'That school is not assigned to you today.', 'school_not_available');
   const { distance } = verifyFix([site], f);
   const row = await tx(req.user, async (c) => {
     const activeAttendance = (await c.query(

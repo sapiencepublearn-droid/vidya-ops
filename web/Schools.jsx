@@ -23,7 +23,9 @@ export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock,
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
-  const schools = useResource(() => api.schools('?active=true&limit=500'), []);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
+  const schools = useResource(() => api.schools('?active=true'), []);
   const list = schools.data || [];
 
   const filtered = list.filter((s) => {
@@ -140,106 +142,75 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
   );
 }
 
-
-function schoolImportValue(v) {
-  return normExcel(v).replace(/^[-—]+$/, '').trim();
+function normalizeSchoolKey(value) {
+  return normExcel(value).toLowerCase().replace(/\b(school|higher secondary school|matriculation school)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-function schoolImportRecord(parsed) {
-  const h = parsed.out || {};
-  const c = h.contacts || {};
-  const name = schoolImportValue(parsed.schoolName);
-  const zone = schoolImportValue(h.location);
-  const principal = schoolImportValue(c.principal);
-  const principalPhone = schoolImportValue(c.principalPhone);
-  const correspondent = schoolImportValue(c.correspondent);
-  const correspondentPhone = schoolImportValue(c.correspondentPhone);
-  const contactPerson = principal || correspondent;
-  const contactPhone = principalPhone || correspondentPhone;
-  return {
-    name, zone, contactPerson,
-    contactDesignation: principal ? 'Principal' : correspondent ? 'Correspondent' : '',
-    contactPhone, history: h,
-  };
-}
+async function importSchoolWorkbooks(files, api, existingSchools) {
+  const schoolsByKey = new Map((existingSchools || []).map(s => [normalizeSchoolKey(s.name), s]));
+  const results = [];
+  const seen = new Set();
+  for (const file of Array.from(files || [])) {
+    let workbook;
+    try { workbook = await readXlsxFiles(file); }
+    catch (e) { results.push({ file: file.name, status: 'error', message: e.message || 'Could not read Excel file.' }); continue; }
 
-const normalizeSchoolName = (v) => normExcel(v)
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, ' ')
-  .replace(/\b(school|matriculation|matric|higher|secondary)\b/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim();
+    const candidates = (workbook.worksheets || [{ cells: workbook.cells, name: workbook.sheetName }])
+      .map(ws => ({ ws, ...schoolImportCandidate(ws.cells, ws.name, file.name) }))
+      .filter(x => x.usable)
+      .sort((a,b) => b.score-a.score);
 
-function BulkSchoolImport({ T, api, isPhone, Btn, onDone, onClose }) {
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState(null);
-  const [report, setReport] = useState(null);
-  const run = async (files) => {
-    if (!files?.length) return;
-    setBusy(true); setProblem(null); setReport(null);
-    const results = { created: [], updated: [], failed: [] };
-    try {
-      const existing = await api.schools('?limit=500');
-      const byName = new Map((existing || []).map(s => [normalizeSchoolName(s.name), s]));
-      for (const file of Array.from(files)) {
-        try {
-          const parsed = await readXlsxFiles(file);
-          const item = schoolImportRecord(parsed);
-          if (!item.name || !item.zone) throw new Error('School name or location is missing.');
-          const key = normalizeSchoolName(item.name);
-          const current = byName.get(key);
-          if (current) {
-            const updated = await api.admin.updateSchool(current.location_id, {
-              name: item.name,
-              zone: item.zone,
-              ...(item.contactPerson ? { contactPerson: item.contactPerson } : {}),
-              ...(item.contactDesignation ? { contactDesignation: item.contactDesignation } : {}),
-              ...(item.contactPhone ? { contactPhone: item.contactPhone } : {}),
-            }, newActionKey());
-            await api.admin.updateSchoolHistory(current.location_id, item.history, newActionKey());
-            byName.set(key, { ...current, ...updated });
-            results.updated.push(item.name);
-          } else {
-            const created = await api.admin.createSchool({
-              name: item.name, zone: item.zone,
-              ...(item.contactPerson ? { contactPerson: item.contactPerson } : {}),
-              ...(item.contactDesignation ? { contactDesignation: item.contactDesignation } : {}),
-              ...(item.contactPhone ? { contactPhone: item.contactPhone } : {}),
-              latitude: null, longitude: null, radiusMetres: 100, isActive: true,
-            }, newActionKey());
-            await api.admin.updateSchoolHistory(created.location_id, item.history, newActionKey());
-            byName.set(key, created);
-            results.created.push(item.name);
-          }
-        } catch (e) {
-          results.failed.push({ file: file.name, message: e?.message || 'Import failed' });
+    // A workbook may contain several real school sheets. Import each usable
+    // sheet once, while ignoring blank/placeholder template sheets.
+    for (const candidate of candidates) {
+      const key = normalizeSchoolKey(candidate.name);
+      if (!key) continue;
+      // The same school may appear in a master workbook and its individual
+      // history workbook. Let the later record update the same school rather
+      // than creating a duplicate. The database's active-name uniqueness is
+      // the final guard as well.
+      if (seen.has(`${key}|${candidate.ws.name}|${file.name}`)) continue;
+      seen.add(`${key}|${candidate.ws.name}|${file.name}`);
+      try {
+        const imported = importSchoolHistoryTemplate(candidate.ws.cells, {});
+        const history = imported.out;
+        const name = candidate.name;
+        const zone = candidate.location;
+        const contact = history.contacts?.principal || history.contacts?.correspondent || '';
+        const phone = history.contacts?.principalPhone || history.contacts?.correspondentPhone || '';
+        const existing = schoolsByKey.get(key);
+        let school;
+        if (existing) {
+          school = await api.admin.updateSchool(existing.location_id, {
+            name,
+            zone,
+            ...(contact ? { contactPerson: contact } : {}),
+            ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
+            ...(phone ? { contactPhone: phone } : {}),
+          }, newActionKey());
+          await api.admin.updateSchoolHistory(existing.location_id, history, newActionKey());
+          schoolsByKey.set(key, { ...existing, ...school });
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: zone });
+        } else {
+          school = await api.admin.createSchool({
+            name, zone,
+            ...(contact ? { contactPerson: contact } : {}),
+            ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
+            ...(phone ? { contactPhone: phone } : {}),
+            radiusMetres: 100,
+            isActive: true,
+          }, newActionKey());
+          await api.admin.updateSchoolHistory(school.location_id, history, newActionKey());
+          schoolsByKey.set(key, school);
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'created', name, location: zone });
         }
+      } catch (e) {
+        results.push({ file: file.name, sheet: candidate.ws.name, status: 'error', name: candidate.name, message: e.message || 'Import failed.' });
       }
-      setReport(results);
-      onDone?.();
-    } catch (e) { setProblem(e); }
-    finally { setBusy(false); }
-  };
-  return <div style={{position:'fixed',inset:0,background:T.overlay,zIndex:70,display:'flex',alignItems:isPhone?'flex-end':'center',justifyContent:'center',padding:isPhone?0:16}}>
-    <div className="rise" style={{width:'100%',maxWidth:560,maxHeight:'90vh',overflowY:'auto',background:T.bg,padding:28}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:8}}>
-        <div><h2 className="tight" style={{fontSize:20,margin:0}}>Import School History</h2><div style={{fontSize:12,color:T.mute,marginTop:5}}>Upload one or many Excel files to create or update the School Master.</div></div>
-        <button className="press" onClick={onClose} style={{background:'none',border:0,color:T.faint,fontSize:18,cursor:'pointer'}}>×</button>
-      </div>
-      <div style={{padding:'14px 0 18px',fontSize:12,color:T.mute,lineHeight:1.6}}>The importer saves the school name, location, contact details and the complete 2026–2027 history. It never overwrites confirmed coordinates, radius or Active/Inactive status.</div>
-      <label className="press" style={{display:'inline-flex',alignItems:'center',gap:8,padding:'11px 14px',borderRadius:9,border:`1px solid ${T.line}`,cursor:busy?'wait':'pointer',fontSize:13,color:T.text}}>
-        {busy ? 'Importing…' : 'Choose Excel files'}
-        <input type="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={e=>run(e.target.files)} style={{display:'none'}} />
-      </label>
-      {problem && <div style={{marginTop:16,color:T.accent,fontSize:13}}>{problem.message}</div>}
-      {report && <div style={{marginTop:22,borderTop:`1px solid ${T.line}`,paddingTop:18}}>
-        <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>Import complete</div>
-        <div style={{fontSize:13,lineHeight:1.8}}>Created: <strong>{report.created.length}</strong> · Updated: <strong>{report.updated.length}</strong> · Failed: <strong>{report.failed.length}</strong></div>
-        {report.failed.length > 0 && <div style={{marginTop:14,fontSize:12,color:T.accent}}>{report.failed.map(x=><div key={x.file}>{x.file}: {x.message}</div>)}</div>}
-        <div style={{marginTop:18}}><Btn onClick={onClose}>Done</Btn></div>
-      </div>}
-    </div>
-  </div>;
+    }
+    if (!candidates.length) results.push({ file: file.name, status: 'skipped', message: 'No usable school sheet found. The importer expects a school name and LOCATION field.' });
+  }
+  return results;
 }
 
 export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
@@ -249,9 +220,10 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
   const [editing, setEditing] = useState(null);   // school object, or 'new'
   const [open, setOpen] = useState(null);         // school id for detail
   const [mapOpen, setMapOpen] = useState(false);
-  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
 
-  const schools = useResource(() => api.schools('?limit=500'), []);
+  const schools = useResource(() => api.schools(), []);
   const list = schools.data || [];
 
   const zones = useMemo(
@@ -287,10 +259,30 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
-          <Btn variant="line" onClick={() => setBulkImportOpen(true)}>Import Excel</Btn>
+          <label className="press" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',padding:'9px 12px',borderRadius:8,border:`1px solid ${T.line}`,color:T.text,cursor:bulkImporting?'wait':'pointer',fontSize:13,opacity:bulkImporting?.65:1}}>
+            {bulkImporting ? 'Importing…' : 'Import Excel'}
+            <input type="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={bulkImporting} style={{display:'none'}} onChange={async(e)=>{
+              const files=Array.from(e.target.files||[]); e.target.value=''; if(!files.length)return;
+              setBulkImporting(true); setBulkResult(null);
+              try { const all=await api.schools('?limit=200'); const result=await importSchoolWorkbooks(files,api,all||[]); setBulkResult(result); await schools.reload(); }
+              catch(err){ setBulkResult([{file:'Import',status:'error',message:err.message||'Bulk import failed.'}]); }
+              finally { setBulkImporting(false); }
+            }}/>
+          </label>
           <Btn onClick={() => setEditing('new')}>Add school</Btn>
         </div>
       </div>
+
+      {bulkResult && <div style={{marginBottom:18,padding:14,border:`1px solid ${T.line}`,borderRadius:10,background:T.sub}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:8}}>
+          <div style={{fontSize:13,fontWeight:600}}>Excel import completed</div>
+          <button className="press" onClick={()=>setBulkResult(null)} style={{background:'none',border:'none',color:T.faint,cursor:'pointer',fontSize:18}}>×</button>
+        </div>
+        <div style={{fontSize:12,color:T.mute,marginBottom:8}}>Created: {bulkResult.filter(x=>x.status==='created').length} · Updated: {bulkResult.filter(x=>x.status==='updated').length} · Skipped: {bulkResult.filter(x=>x.status==='skipped').length} · Errors: {bulkResult.filter(x=>x.status==='error').length}</div>
+        <div style={{display:'grid',gap:5,maxHeight:220,overflowY:'auto'}}>
+          {bulkResult.map((r,i)=><div key={i} style={{fontSize:12,color:r.status==='error'?T.accent:T.text}}>{r.status.toUpperCase()} · {r.name || r.file}{r.location ? ` · ${r.location}` : ''}{r.message ? ` — ${r.message}` : ''}</div>)}
+        </div>
+      </div>}
 
       <div style={{
         display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap',
@@ -355,9 +347,6 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
         <SchoolMap T={T} schools={list} isPhone={isPhone}
           onViewDetails={(id) => setOpen(id)} onClose={() => setMapOpen(false)} />
       )}
-
-      {bulkImportOpen && <BulkSchoolImport T={T} api={api} isPhone={isPhone} Btn={Btn}
-        onDone={() => schools.reload()} onClose={() => setBulkImportOpen(false)} />}
 
       {editing && (
         <SchoolForm T={T} api={api} isPhone={isPhone}
@@ -660,8 +649,6 @@ async function readXlsxFiles(file) {
   const sharedXml = await get('xl/sharedStrings.xml');
   const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si => Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
 
-  // Resolve the worksheet by workbook metadata instead of assuming Sheet1.
-  // Real school files often have an extra cover/instructions sheet first.
   const workbookXml = await get('xl/workbook.xml');
   const relsXml = await get('xl/_rels/workbook.xml.rels');
   const workbookDoc = workbookXml ? new DOMParser().parseFromString(workbookXml,'application/xml') : null;
@@ -669,30 +656,47 @@ async function readXlsxFiles(file) {
   const relMap = {};
   relsDoc?.querySelectorAll('Relationship').forEach(r => relMap[r.getAttribute('Id')] = r.getAttribute('Target'));
   const sheets = Array.from(workbookDoc?.querySelectorAll('sheet') || []);
-  let chosen = null;
-  for (const sh of sheets) {
-    const name = normExcel(sh.getAttribute('name'));
-    const target = relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')];
-    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : '';
-    if (/school\s*name|school\s*history/i.test(name) || /school\s*history/i.test(path)) { chosen = { name, path }; break; }
-  }
-  if (!chosen) {
-    const sh = sheets[0];
-    const target = sh ? (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]) : null;
-    chosen = { name: normExcel(sh?.getAttribute('name') || 'Sheet1'), path: target ? (target.startsWith('/') ? target.slice(1) : `xl/${target}`) : 'xl/worksheets/sheet1.xml' };
-  }
-  const sheetXml = await get(chosen.path || 'xl/worksheets/sheet1.xml');
-  if (!sheetXml) throw new Error('The School History worksheet could not be read.');
-  const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
-  const cells = {};
-  doc.querySelectorAll('sheetData > row > c').forEach(c => {
-    const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
-    let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
-    if (type === 's') value = shared[Number(value)] ?? '';
-    if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
-    cells[ref] = String(value).trim();
-  });
-  return { cells, sheetName: chosen.name };
+
+  const parseSheet = async (sh) => {
+    const name = normExcel(sh?.getAttribute('name') || 'Sheet1');
+    const target = sh && (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]);
+    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : 'xl/worksheets/sheet1.xml';
+    const sheetXml = await get(path);
+    if (!sheetXml) return { name, path, cells: {} };
+    const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
+    const cells = {};
+    doc.querySelectorAll('sheetData > row > c').forEach(c => {
+      const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
+      let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
+      if (type === 's') value = shared[Number(value)] ?? '';
+      if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
+      cells[ref] = String(value).trim();
+    });
+    return { name, path, cells };
+  };
+
+  const worksheets = [];
+  for (const sh of sheets) worksheets.push(await parseSheet(sh));
+  if (!worksheets.length) worksheets.push(await parseSheet(null));
+
+  // Prefer a sheet that actually looks like a School History form. This also
+  // handles workbooks containing several school sheets, cover sheets, or
+  // partially filled template sheets.
+  const scoreSheet = (ws) => {
+    const values = Object.values(ws.cells).map(normExcel).filter(Boolean);
+    const text = values.join(' | ');
+    let score = 0;
+    if (/SAPIENCE\s+SCHOOL\s+HISTORY/i.test(text)) score += 8;
+    if (values.some(v => /^LOCATION\s*[:：]?/i.test(v))) score += 5;
+    if (values.some(v => /^CONTACTS?$/i.test(v))) score += 3;
+    if (values.some(v => /^BOOKS\s*&\s*PAYMENT$/i.test(v))) score += 2;
+    if (values.some(v => /^(CORRESPONDENT|PRINCIPAL)$/i.test(v))) score += 2;
+    const row2 = Object.entries(ws.cells).filter(([r]) => /^\w+2$/.test(r)).map(([,v])=>normExcel(v)).find(Boolean) || '';
+    if (row2 && !/^school[_ ]?name$/i.test(row2) && !/^francis$/i.test(row2)) score += 2;
+    return score;
+  };
+  const chosen = [...worksheets].sort((a,b)=>scoreSheet(b)-scoreSheet(a))[0] || worksheets[0];
+  return { cells: chosen.cells, sheetName: chosen.name, worksheets, fileName: file.name };
 }
 
 const excelText = (cells, ref) => String(cells[ref] ?? '').trim();
@@ -723,6 +727,71 @@ const splitContact = (value) => {
 // then reads the value under the matching header. It does NOT rely on a fixed
 // "B19 means Teachers Copy" assumption. This prevents values such as STATUS or
 // another row's date from being attached to the preceding field.
+function extractSchoolIdentity(cells, sheetName = '', fileName = '') {
+  const entries = Object.entries(cells).map(([ref, value]) => {
+    const m = ref.match(/^([A-Z]+)(\d+)$/); if (!m) return null;
+    let col = 0; for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
+    return { row: Number(m[2]), col, value: normExcel(value) };
+  }).filter(Boolean);
+  const rows = new Map();
+  for (const x of entries) { if (!rows.has(x.row)) rows.set(x.row, []); rows.get(x.row).push(x); }
+  for (const xs of rows.values()) xs.sort((a,b)=>a.col-b.col);
+  const badName = (v) => !v || /^(school[_ ]?name|francis|name|school|contacts?|books\s*&\s*payment|correspondent|principal|office|coordinator|key\s*person|current\s*status|comments|delivery\s*date)$/i.test(normExcel(v));
+  let name = '';
+  for (const r of [2,1,3]) {
+    const xs = rows.get(r) || [];
+    const labelled = xs.find(x => /^(school[_ ]?name|school)\s*[:：]?$/i.test(x.value));
+    if (labelled) {
+      const next = xs.find(x => x.col > labelled.col && x.value && !/^location\b/i.test(x.value));
+      if (next && !badName(next.value)) { name = next.value; break; }
+    }
+    const candidate = xs.map(x=>x.value).find(v => !badName(v) && !/^sapience\s+school\s+history/i.test(v) && !/^location\s*:/i.test(v) && !/^category\s*:/i.test(v) && !/^vintage\s*:/i.test(v));
+    if (candidate) { name = candidate; break; }
+  }
+  let location = '';
+  for (const [r,xs] of rows) {
+    const combined = xs.map(x=>x.value).filter(Boolean);
+    for (let i=0;i<combined.length;i++) {
+      const v=combined[i];
+      const m=v.match(/^location\s*[:：]\s*(.*)$/i);
+      if (m && m[1].trim()) { location=m[1].trim(); break; }
+      if (/^location\s*[:：]?$/i.test(v)) {
+        const next=combined[i+1] || '';
+        if (next) { location=next.replace(/^[:：]\s*/,'').trim(); break; }
+      }
+    }
+    if (location) break;
+  }
+  if (!name) {
+    const base = String(fileName || '').replace(/\.xlsx$/i,'').replace(/^SC\s*[-_]\s*/i,'').trim();
+    const parts = base.split(/\s+-\s+|\s+[-–—]\s+/).map(normExcel).filter(Boolean);
+    if (parts.length > 1) name = parts[0];
+    else if (base && !/^school\s*list/i.test(base)) name = base;
+  }
+  if (!location && fileName) {
+    const base=String(fileName).replace(/\.xlsx$/i,'').replace(/^SC\s*[-_]\s*/i,'').trim();
+    const parts=base.split(/\s+-\s+|\s+[-–—]\s+/).map(normExcel).filter(Boolean);
+    if (parts.length>1) location=parts.at(-1);
+  }
+  name = normExcel(name).replace(/\s+school\s+history.*$/i,'').trim();
+  location = normExcel(location);
+  return { name, location };
+}
+
+function schoolImportCandidate(cells, sheetName, fileName) {
+  const identity = extractSchoolIdentity(cells, sheetName, fileName);
+  const values = Object.values(cells).map(normExcel).filter(Boolean);
+  const text = values.join(' | ');
+  const score = (identity.name ? 4 : 0) + (identity.location ? 4 : 0)
+    + (/SAPIENCE\s+SCHOOL\s+HISTORY/i.test(text) ? 2 : 0)
+    + (values.some(v => /^CONTACTS?$/i.test(v)) ? 2 : 0)
+    + (values.some(v => /^(CORRESPONDENT|PRINCIPAL)$/i.test(v)) ? 1 : 0);
+  const usable = !!identity.name && !!identity.location
+    && !/^(school[_ ]?name|francis|name|school)$/i.test(identity.name)
+    && score >= 8;
+  return { ...identity, score, usable };
+}
+
 function importSchoolHistoryTemplate(cells, current) {
   // Excel import is a replacement: clear fields from previous bad imports first.
   const out = {
@@ -744,12 +813,25 @@ function importSchoolHistoryTemplate(cells, current) {
   const put=(path,value,date=false)=>{let v=normExcel(value);if(date)v=excelDateText(v);if(!v||v==='-'||v==='—')return;const ks=path.split('.');let o=out;for(const k of ks.slice(0,-1))o=o[k];o[ks.at(-1)]=v;};
   const inline=(v,label)=>normExcel(v).replace(new RegExp(`^${label.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}\\s*[:：]\\s*`,'i'),'').trim();
 
-  // Basic details: row 3 contains independent LABEL: VALUE cells.
+  // Basic details: support both combined cells (LOCATION: MADAMBAKKAM) and
+  // split cells (LOCATION: | Madambakkam). Do not depend on row/column position.
   for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){
-    const x=(rows.get(3)||[]).find(c=>new RegExp(`^${label}\\s*[:：]\\s*`, 'i').test(c.value));
-    if(x)put(key,inline(x.value,label));
+    let found='';
+    for(const xs of rows.values()){
+      for(let i=0;i<xs.length;i++){
+        const v=normExcel(xs[i].value);
+        const m=v.match(new RegExp(`^${label}\\s*[:：]\\s*(.*)$`, 'i'));
+        if(m && m[1].trim()){ found=m[1].trim(); break; }
+        if(new RegExp(`^${label}\\s*[:：]?$`, 'i').test(v)){
+          const next=xs.find(x=>x.col>xs[i].col && normExcel(x.value));
+          if(next) { found=normExcel(next.value).replace(/^[:：]\\s*/,''); break; }
+        }
+      }
+      if(found) break;
+    }
+    if(found) put(key,found);
   }
-  const schoolName=(rows.get(2)||[]).map(x=>x.value).find(Boolean)||'';
+  const schoolName=extractSchoolIdentity(cells).name || '';
 
   // Contacts: role in A, person in B, phone in C. Preserve nil/blank as blank.
   for(const [label,key,phoneKey] of [['CORRESPONDENT','correspondent','correspondentPhone'],['PRINCIPAL','principal','principalPhone'],['KEY PERSON','keyPerson','keyPersonPhone']]){
@@ -799,7 +881,7 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
   const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:isPhone?24:40,padding:isPhone?12:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub,overflow:'hidden'}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2026–2027 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
     {!filled ? <M style={{fontSize:13,color:T.mute}}>{readOnly ? 'No history details entered yet.' : 'No history details entered yet. Use the corner edit button to add the school record.'}</M> : historySections.map(([title,fields])=>{
       const vals=fields.map(([path,label])=>[path,label,String(getPath(initial,path)).trim()]).filter(([, ,v])=>v);
       if(!vals.length)return null;
@@ -844,8 +926,8 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
       </div>
     })}
     {!readOnly && editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
-      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2025–2026 School History format and fills the form. You can edit anything before saving.</span></div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2026–2027</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2026–2027 School History format and fills the form. You can edit anything before saving.</span></div>
       {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn:/comments|remarks|appComments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label)?<textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/>:<input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
       {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}<div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
     </div></div>}

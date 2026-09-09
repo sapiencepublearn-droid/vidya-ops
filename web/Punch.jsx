@@ -192,7 +192,7 @@ export function PunchPanel({ T, api, att, role, loading, error, todayTasks = [],
           {att.status}{att.check_in_accuracy ? ` · ±${att.check_in_accuracy} m` : ''}
         </M>
 
-        {isSchoolVisitRole && <SchoolVisitPanel T={T} api={api} role={role} M={M} Btn={Btn} />}
+        {isSchoolVisitRole && <SchoolVisitPanel T={T} api={api} M={M} Btn={Btn} />}
         <BigButton T={T} busy={busy} stage={stage} onClick={openEndDay}
           label="End Day" variant="line" />
         <Problem T={T} problem={problem} reported={reported} reporting={reporting}
@@ -300,7 +300,7 @@ function Problem({ T, problem, reported, reporting, onRetry, onReport, Btn, M })
 
 /* ─────────────────────────────────────────── trainer school visits */
 
-function SchoolVisitPanel({ T, api, role, M, Btn }) {
+function SchoolVisitPanel({ T, api, M, Btn }) {
   const [data, setData] = useState(null);
   const [schoolId, setSchoolId] = useState('');
   const [schoolQuery, setSchoolQuery] = useState('');
@@ -341,7 +341,7 @@ function SchoolVisitPanel({ T, api, role, M, Btn }) {
         </>
       ) : (
         <>
-          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>{role === 'Technical Support' ? 'Select any active school with a confirmed location. You must be physically at the school to check in and check out.' : 'Select your assigned school and check in. Check out when you leave the school.'}</div>
+          <div style={{ fontSize: 12, color: T.mute, lineHeight: 1.6, marginBottom: 12 }}>Select the school you are visiting and check in. You must be at the school to complete the check-in. Check out when you leave the school.</div>
           <div style={{ position: 'relative', marginBottom: 10 }}>
             <input value={schoolQuery} disabled={busy} onChange={(e) => { setSchoolQuery(e.target.value); setSchoolId(''); }}
               placeholder="Type school name…" autoComplete="off"

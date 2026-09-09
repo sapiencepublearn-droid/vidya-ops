@@ -92,22 +92,20 @@ test('the employee sees Punch In and End Day', () => {
   assert.match(Punch, /label="End Day"/);
 });
 
-test('the school visit UI lets Technical Support choose an active school', () => {
-  assert.match(Punch, /School Check In/);
-  assert.match(Punch, /role === 'Technical Support'/);
-  assert.match(Punch, /api\.schoolVisitsToday\(\)/);
-  assert.match(Punch, /api\.schoolVisitCheckIn\(\{ \.\.\./);
+test('SECURITY: the UI never asks the employee where they are', () => {
+  assert.equal(/Select School|Select Zone|Office or School\?|Where are you/i.test(ui), false,
+    'no manual location choice anywhere');
+  // No school picker in the punch flow at all.
+  assert.equal(/<select[^>]*school/i.test(Punch), false);
 });
 
-test('SECURITY: normal attendance never sends a client-declared location type', () => {
+test('SECURITY: the client never sends a location classification', () => {
   const punchCode = strip(Punch);
-  assert.equal(/locationType\s*:\s*['"]/.test(punchCode), false,
-    'normal attendance must not submit a client-declared type');
-  // Normal Punch In still sends only the raw GPS fix. School visits use a
-  // server-validated school id in their dedicated endpoint.
+  assert.equal(/school_id|schoolId\s*:|locationType\s*:\s*['"]/.test(punchCode), false,
+    'no client-declared school or type is submitted');
+  // Only the raw fix from readFix() goes to the server.
   assert.match(punchCode, /const fix = await readFix\(\)/);
   assert.match(punchCode, /api\.checkIn\(fix, actionKey\.current\)/);
-  assert.match(punchCode, /locationId: schoolId/);
 });
 
 test('SECURITY: the client does not compute distance or decide a match', () => {
