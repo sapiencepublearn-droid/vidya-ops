@@ -9,7 +9,7 @@ services:
     # --include=dev is required: NODE_ENV=production makes npm skip
     # devDependencies, and Vite (the frontend build tool) is one of them.
     buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm start
+    startCommand: npm run migrate && npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV

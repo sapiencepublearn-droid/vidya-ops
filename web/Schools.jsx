@@ -23,6 +23,8 @@ export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock,
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
   const schools = useResource(() => api.schools('?active=true'), []);
   const list = schools.data || [];
 
@@ -70,7 +72,7 @@ export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock,
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                     <div style={{ fontSize: 12, color: T.mute, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.zone}{s.address ? ` · ${s.address}` : ''}
+                      {s.zone ? `${s.zone}${s.address ? ` · ${s.address}` : ''}` : (s.address || 'Zone not set')}
                     </div>
                   </div>
                   <span style={{ color: T.faint, fontSize: 18 }}>›</span>
@@ -105,7 +107,7 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
     <div>
       {back}
       <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>{s.name}</h1>
-      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone}{s.is_active ? '' : ' · inactive'}</div>
+      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone ? s.zone : 'Zone not set'}{s.is_active ? '' : ' · inactive'}</div>
 
       <div style={{ borderTop: `1px solid ${T.line}` }}>
         {[
@@ -140,6 +142,88 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
   );
 }
 
+function normalizeSchoolKey(value) {
+  return normExcel(value).toLowerCase().replace(/\b(school|higher secondary school|matriculation school)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+async function importSchoolWorkbooks(files, api, existingSchools) {
+  const schoolsByKey = new Map((existingSchools || []).map(s => [normalizeSchoolKey(s.name), s]));
+  const results = [];
+  const seen = new Set();
+  for (const file of Array.from(files || [])) {
+    let workbook;
+    try { workbook = await readXlsxFiles(file); }
+    catch (e) { results.push({ file: file.name, status: 'error', message: e.message || 'Could not read Excel file.' }); continue; }
+
+    const candidates = (workbook.worksheets || [{ cells: workbook.cells, name: workbook.sheetName }])
+      .map(ws => ({ ws, ...schoolImportCandidate(ws.cells, ws.name, file.name) }))
+      .filter(x => x.usable)
+      .sort((a,b) => b.score-a.score);
+
+    // A workbook may contain several real school sheets. Import each usable
+    // sheet once, while ignoring blank/placeholder template sheets.
+    for (const candidate of candidates) {
+      const key = normalizeSchoolKey(candidate.name);
+      if (!key) continue;
+      // The same school may appear in a master workbook and its individual
+      // history workbook. Let the later record update the same school rather
+      // than creating a duplicate. The database's active-name uniqueness is
+      // the final guard as well.
+      if (seen.has(`${key}|${candidate.ws.name}|${file.name}`)) continue;
+      seen.add(`${key}|${candidate.ws.name}|${file.name}`);
+      try {
+        const imported = importSchoolHistoryTemplate(candidate.ws.cells, {});
+        const history = imported.out;
+        const name = candidate.name;
+        const address = candidate.location;
+        const contact = history.contacts?.principal || history.contacts?.correspondent || '';
+        const phone = history.contacts?.principalPhone || history.contacts?.correspondentPhone || '';
+        const existing = schoolsByKey.get(key);
+        let school;
+        if (existing) {
+          // Save the history first. If the Excel data is invalid, do not leave
+          // a half-updated School Master record behind.
+          await api.admin.updateSchoolHistory(existing.location_id, history, newActionKey());
+          school = await api.admin.updateSchool(existing.location_id, {
+            name,
+            zone: null,
+            address,
+            ...(contact ? { contactPerson: contact } : {}),
+            ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
+            ...(phone ? { contactPhone: phone } : {}),
+          }, newActionKey());
+          schoolsByKey.set(key, { ...existing, ...school });
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: address });
+        } else {
+          school = await api.admin.createSchool({
+            name, zone: null, address,
+            ...(contact ? { contactPerson: contact } : {}),
+            ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
+            ...(phone ? { contactPhone: phone } : {}),
+            radiusMetres: 100,
+            isActive: true,
+          }, newActionKey());
+          try {
+            await api.admin.updateSchoolHistory(school.location_id, history, newActionKey());
+          } catch (historyError) {
+            // A newly created school has no attendance/visit/assignment refs,
+            // so it is safe to roll it back if its history cannot be saved.
+            try { await api.admin.deleteSchool(school.location_id, newActionKey()); } catch { /* keep original error */ }
+            throw historyError;
+          }
+          schoolsByKey.set(key, school);
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'created', name, location: address });
+        }
+      } catch (e) {
+        const detail = Array.isArray(e.details) && e.details.length ? ` ${e.details.map(d => `${d.field}: ${d.message}`).join('; ')}` : '';
+        results.push({ file: file.name, sheet: candidate.ws.name, status: 'error', name: candidate.name, message: `${e.message || 'Import failed.'}${detail}` });
+      }
+    }
+    if (!candidates.length) results.push({ file: file.name, status: 'skipped', message: 'No usable school sheet found. The importer expects a school name and LOCATION field.' });
+  }
+  return results;
+}
+
 export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
   const [q, setQ] = useState('');
   const [zone, setZone] = useState('All');
@@ -147,6 +231,8 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
   const [editing, setEditing] = useState(null);   // school object, or 'new'
   const [open, setOpen] = useState(null);         // school id for detail
   const [mapOpen, setMapOpen] = useState(false);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
 
   const schools = useResource(() => api.schools(), []);
   const list = schools.data || [];
@@ -184,9 +270,30 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
+          <label className="press" style={{display:'inline-flex',alignItems:'center',justifyContent:'center',padding:'9px 12px',borderRadius:8,border:`1px solid ${T.line}`,color:T.text,cursor:bulkImporting?'wait':'pointer',fontSize:13,opacity:bulkImporting?.65:1}}>
+            {bulkImporting ? 'Importing…' : 'Import Excel'}
+            <input type="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={bulkImporting} style={{display:'none'}} onChange={async(e)=>{
+              const files=Array.from(e.target.files||[]); e.target.value=''; if(!files.length)return;
+              setBulkImporting(true); setBulkResult(null);
+              try { const all=await api.schools('?limit=200'); const result=await importSchoolWorkbooks(files,api,all||[]); setBulkResult(result); await schools.reload(); }
+              catch(err){ setBulkResult([{file:'Import',status:'error',message:err.message||'Bulk import failed.'}]); }
+              finally { setBulkImporting(false); }
+            }}/>
+          </label>
           <Btn onClick={() => setEditing('new')}>Add school</Btn>
         </div>
       </div>
+
+      {bulkResult && <div style={{marginBottom:18,padding:14,border:`1px solid ${T.line}`,borderRadius:10,background:T.sub}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,marginBottom:8}}>
+          <div style={{fontSize:13,fontWeight:600}}>Excel import completed</div>
+          <button className="press" onClick={()=>setBulkResult(null)} style={{background:'none',border:'none',color:T.faint,cursor:'pointer',fontSize:18}}>×</button>
+        </div>
+        <div style={{fontSize:12,color:T.mute,marginBottom:8}}>Created: {bulkResult.filter(x=>x.status==='created').length} · Updated: {bulkResult.filter(x=>x.status==='updated').length} · Skipped: {bulkResult.filter(x=>x.status==='skipped').length} · Errors: {bulkResult.filter(x=>x.status==='error').length}</div>
+        <div style={{display:'grid',gap:5,maxHeight:220,overflowY:'auto'}}>
+          {bulkResult.map((r,i)=><div key={i} style={{fontSize:12,color:r.status==='error'?T.accent:T.text}}>{r.status.toUpperCase()} · {r.name || r.file}{r.location ? ` · ${r.location}` : ''}{r.message ? ` — ${r.message}` : ''}</div>)}
+        </div>
+      </div>}
 
       <div style={{
         display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap',
@@ -231,7 +338,7 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
                             )}
                           </div>
                           <div style={{ fontSize: 12, color: T.mute, marginTop: 3 }}>
-                            {s.zone}{s.address ? ` · ${s.address}` : ''}
+                            {s.zone ? `${s.zone}${s.address ? ` · ${s.address}` : ''}` : (s.address || 'Zone not set')}
                           </div>
                         </div>
                         <M style={{
@@ -310,10 +417,18 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
       {back}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 8 }}>
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{s.name}</h1>
-        <Btn variant="line" onClick={() => onEdit(s)}>Edit</Btn>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <Btn variant="line" onClick={() => onEdit(s)}>Edit</Btn>
+          <Btn variant="line" onClick={async()=>{
+            const ok=window.confirm(`Delete ${s.name} permanently? This removes the imported School History too. If attendance, visits or assignments exist, deletion will be refused.`);
+            if(!ok)return;
+            try { await api.admin.deleteSchool(s.location_id, newActionKey()); onBack(); }
+            catch(e){ setProblem(e); }
+          }}>Delete</Btn>
+        </div>
       </div>
       <M style={{ fontSize: 12, color: T.mute, display: 'block', marginBottom: 32 }}>
-        {s.zone}{s.is_active ? '' : ' · inactive'}
+        {s.zone ? s.zone : 'Zone not set'}{s.is_active ? '' : ' · inactive'}
       </M>
 
       <div style={{
@@ -371,7 +486,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
       <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
-        Only these people can punch in here. Everyone else is refused, even standing at the gate.
+        Assignments are used for planning. Technical Support can visit any active school; Trainers follow their assigned-school visit list.
       </div>
 
       {problem && (
@@ -496,12 +611,24 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 /* ──────────────────────────────────────────────────── add and edit */
 
 
+function historyDisplayValue(path, value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if ((path === 'vintage' || path === 'books') && /^CATEGORY\s*[:：]/i.test(raw)) return '';
+  if (path === 'category') return raw.replace(/^CATEGORY\s*[:：]\s*/i, '').trim();
+  if (path === 'booksPayment.discount' || path === 'booksPayment.discountG1' || /\.discount(?:G1)?$/.test(path)) {
+    const n = Number(raw.replace(/%$/,''));
+    if (Number.isFinite(n) && n >= 0 && n <= 1) return `${Math.round(n * 100)}%`;
+  }
+  return raw;
+}
+
 const historySections = [
-  ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
-  ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
+  ['Books & Payment', [['booksPayment.prekg','Pre-KG — Initial Count'], ['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.g1','G1 — Initial Count'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.deliveryDateAdditional','Additional Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.discountG1','Discount — G1'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
   ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual — Count'], ['deliverables1.teachersManual1Date','Teachers Manual — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Card — Count'], ['deliverables1.flashCardsDate','Flash Card — Date']]],
-  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Count / Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App Comments']]],
+  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.prekg','Windows App — Pre-KG'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.g1','Windows App — G1'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Count / Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.prekg','Kids App — Pre-KG'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.g1','Kids App — G1'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App Comments']]],
   ['Deliverables 3', [['deliverables3.questionPaper','Question Paper — Count'], ['deliverables3.questionPaperDate','Question Paper — Date'], ['deliverables3.progressCard','Progress Card — Count'], ['deliverables3.progressCardDate','Progress Card — Date']]],
   ['Services', [['services.t1','T1'], ['services.atu1','ATU 1'], ['services.atu1Date','ATU 1 — Date'], ['services.atu1Comments','ATU 1 — Comments'], ['services.sim1','SIM 1'], ['services.sim1Date','SIM 1 — Date'], ['services.sim1Comments','SIM 1 — Comments'], ['services.t2','T2'], ['services.atu2','ATU 2'], ['services.atu2Date','ATU 2 — Date'], ['services.atu2Comments','ATU 2 — Comments'], ['services.sim2','SIM 2'], ['services.sim2Date','SIM 2 — Date'], ['services.sim2Comments','SIM 2 — Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Date','SIM 3 — Date'], ['services.sim3Comments','SIM 3 — Comments']]],
   ['Current status', [['currentStatus','Current Status'], ['comments','Comments']]],
@@ -553,8 +680,6 @@ async function readXlsxFiles(file) {
   const sharedXml = await get('xl/sharedStrings.xml');
   const shared = sharedXml ? Array.from(new DOMParser().parseFromString(sharedXml,'application/xml').querySelectorAll('si')).map(si => Array.from(si.querySelectorAll('t')).map(t=>t.textContent).join('')) : [];
 
-  // Resolve the worksheet by workbook metadata instead of assuming Sheet1.
-  // Real school files often have an extra cover/instructions sheet first.
   const workbookXml = await get('xl/workbook.xml');
   const relsXml = await get('xl/_rels/workbook.xml.rels');
   const workbookDoc = workbookXml ? new DOMParser().parseFromString(workbookXml,'application/xml') : null;
@@ -562,30 +687,47 @@ async function readXlsxFiles(file) {
   const relMap = {};
   relsDoc?.querySelectorAll('Relationship').forEach(r => relMap[r.getAttribute('Id')] = r.getAttribute('Target'));
   const sheets = Array.from(workbookDoc?.querySelectorAll('sheet') || []);
-  let chosen = null;
-  for (const sh of sheets) {
-    const name = normExcel(sh.getAttribute('name'));
-    const target = relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')];
-    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : '';
-    if (/school\s*name|school\s*history/i.test(name) || /school\s*history/i.test(path)) { chosen = { name, path }; break; }
-  }
-  if (!chosen) {
-    const sh = sheets[0];
-    const target = sh ? (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]) : null;
-    chosen = { name: normExcel(sh?.getAttribute('name') || 'Sheet1'), path: target ? (target.startsWith('/') ? target.slice(1) : `xl/${target}`) : 'xl/worksheets/sheet1.xml' };
-  }
-  const sheetXml = await get(chosen.path || 'xl/worksheets/sheet1.xml');
-  if (!sheetXml) throw new Error('The School History worksheet could not be read.');
-  const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
-  const cells = {};
-  doc.querySelectorAll('sheetData > row > c').forEach(c => {
-    const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
-    let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
-    if (type === 's') value = shared[Number(value)] ?? '';
-    if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
-    cells[ref] = String(value).trim();
-  });
-  return { cells, sheetName: chosen.name };
+
+  const parseSheet = async (sh) => {
+    const name = normExcel(sh?.getAttribute('name') || 'Sheet1');
+    const target = sh && (relMap[sh.getAttribute('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')] || relMap[sh.getAttribute('r:id')]);
+    const path = target ? (target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\//,'')}`) : 'xl/worksheets/sheet1.xml';
+    const sheetXml = await get(path);
+    if (!sheetXml) return { name, path, cells: {} };
+    const doc = new DOMParser().parseFromString(sheetXml,'application/xml');
+    const cells = {};
+    doc.querySelectorAll('sheetData > row > c').forEach(c => {
+      const ref = c.getAttribute('r'); const type = c.getAttribute('t'); const v = c.querySelector('v'); const inline = c.querySelector('is');
+      let value = inline ? Array.from(inline.querySelectorAll('t')).map(t=>t.textContent).join('') : (v?.textContent || '');
+      if (type === 's') value = shared[Number(value)] ?? '';
+      if (type === 'b') value = value === '1' ? 'TRUE' : 'FALSE';
+      cells[ref] = String(value).trim();
+    });
+    return { name, path, cells };
+  };
+
+  const worksheets = [];
+  for (const sh of sheets) worksheets.push(await parseSheet(sh));
+  if (!worksheets.length) worksheets.push(await parseSheet(null));
+
+  // Prefer a sheet that actually looks like a School History form. This also
+  // handles workbooks containing several school sheets, cover sheets, or
+  // partially filled template sheets.
+  const scoreSheet = (ws) => {
+    const values = Object.values(ws.cells).map(normExcel).filter(Boolean);
+    const text = values.join(' | ');
+    let score = 0;
+    if (/SAPIENCE\s+SCHOOL\s+HISTORY/i.test(text)) score += 8;
+    if (values.some(v => /^LOCATION\s*[:：]?/i.test(v))) score += 5;
+    if (values.some(v => /^CONTACTS?$/i.test(v))) score += 3;
+    if (values.some(v => /^BOOKS\s*&\s*PAYMENT$/i.test(v))) score += 2;
+    if (values.some(v => /^(CORRESPONDENT|PRINCIPAL)$/i.test(v))) score += 2;
+    const row2 = Object.entries(ws.cells).filter(([r]) => /^\w+2$/.test(r)).map(([,v])=>normExcel(v)).find(Boolean) || '';
+    if (row2 && !/^school[_ ]?name$/i.test(row2) && !/^francis$/i.test(row2)) score += 2;
+    return score;
+  };
+  const chosen = [...worksheets].sort((a,b)=>scoreSheet(b)-scoreSheet(a))[0] || worksheets[0];
+  return { cells: chosen.cells, sheetName: chosen.name, worksheets, fileName: file.name };
 }
 
 const excelText = (cells, ref) => String(cells[ref] ?? '').trim();
@@ -616,14 +758,79 @@ const splitContact = (value) => {
 // then reads the value under the matching header. It does NOT rely on a fixed
 // "B19 means Teachers Copy" assumption. This prevents values such as STATUS or
 // another row's date from being attached to the preceding field.
+function extractSchoolIdentity(cells, sheetName = '', fileName = '') {
+  const entries = Object.entries(cells).map(([ref, value]) => {
+    const m = ref.match(/^([A-Z]+)(\d+)$/); if (!m) return null;
+    let col = 0; for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
+    return { row: Number(m[2]), col, value: normExcel(value) };
+  }).filter(Boolean);
+  const rows = new Map();
+  for (const x of entries) { if (!rows.has(x.row)) rows.set(x.row, []); rows.get(x.row).push(x); }
+  for (const xs of rows.values()) xs.sort((a,b)=>a.col-b.col);
+  const badName = (v) => !v || /^(school[_ ]?name|francis|name|school|contacts?|books\s*&\s*payment|correspondent|principal|office|coordinator|key\s*person|current\s*status|comments|delivery\s*date)$/i.test(normExcel(v));
+  let name = '';
+  for (const r of [2,1,3]) {
+    const xs = rows.get(r) || [];
+    const labelled = xs.find(x => /^(school[_ ]?name|school)\s*[:：]?$/i.test(x.value));
+    if (labelled) {
+      const next = xs.find(x => x.col > labelled.col && x.value && !/^location\b/i.test(x.value));
+      if (next && !badName(next.value)) { name = next.value; break; }
+    }
+    const candidate = xs.map(x=>x.value).find(v => !badName(v) && !/^sapience\s+school\s+history/i.test(v) && !/^location\s*:/i.test(v) && !/^category\s*:/i.test(v) && !/^vintage\s*:/i.test(v));
+    if (candidate) { name = candidate; break; }
+  }
+  let location = '';
+  for (const [r,xs] of rows) {
+    const combined = xs.map(x=>x.value).filter(Boolean);
+    for (let i=0;i<combined.length;i++) {
+      const v=combined[i];
+      const m=v.match(/^location\s*[:：]\s*(.*)$/i);
+      if (m && m[1].trim()) { location=m[1].trim(); break; }
+      if (/^location\s*[:：]?$/i.test(v)) {
+        const next=combined[i+1] || '';
+        if (next) { location=next.replace(/^[:：]\s*/,'').trim(); break; }
+      }
+    }
+    if (location) break;
+  }
+  if (!name) {
+    const base = String(fileName || '').replace(/\.xlsx$/i,'').replace(/^SC\s*[-_]\s*/i,'').trim();
+    const parts = base.split(/\s+-\s+|\s+[-–—]\s+/).map(normExcel).filter(Boolean);
+    if (parts.length > 1) name = parts[0];
+    else if (base && !/^school\s*list/i.test(base)) name = base;
+  }
+  if (!location && fileName) {
+    const base=String(fileName).replace(/\.xlsx$/i,'').replace(/^SC\s*[-_]\s*/i,'').trim();
+    const parts=base.split(/\s+-\s+|\s+[-–—]\s+/).map(normExcel).filter(Boolean);
+    if (parts.length>1) location=parts.at(-1);
+  }
+  name = normExcel(name).replace(/\s+school\s+history.*$/i,'').trim();
+  location = normExcel(location);
+  return { name, location };
+}
+
+function schoolImportCandidate(cells, sheetName, fileName) {
+  const identity = extractSchoolIdentity(cells, sheetName, fileName);
+  const values = Object.values(cells).map(normExcel).filter(Boolean);
+  const text = values.join(' | ');
+  const score = (identity.name ? 4 : 0) + (identity.location ? 4 : 0)
+    + (/SAPIENCE\s+SCHOOL\s+HISTORY/i.test(text) ? 2 : 0)
+    + (values.some(v => /^CONTACTS?$/i.test(v)) ? 2 : 0)
+    + (values.some(v => /^(CORRESPONDENT|PRINCIPAL)$/i.test(v)) ? 1 : 0);
+  const usable = !!identity.name && !!identity.location
+    && !/^(school[_ ]?name|francis|name|school)$/i.test(identity.name)
+    && score >= 8;
+  return { ...identity, score, usable };
+}
+
 function importSchoolHistoryTemplate(cells, current) {
   // Excel import is a replacement: clear fields from previous bad imports first.
   const out = {
     location:'', vintage:'', books:'', category:'',
     contacts:{correspondent:'',correspondentPhone:'',principal:'',principalPhone:'',keyPerson:'',keyPersonPhone:''},
-    booksPayment:{lkg:'',lkgAdditionalOrders:'',lkgReturns:'',lkgRemarks:'',ukg:'',ukgAdditionalOrders:'',ukgReturns:'',ukgRemarks:'',lkgHhp:'',ukgHhp:'',deliveryDate:'',pyCredit:'',discount:'',discountAdditionalOrders:'',discountReturns:'',discountRemarks:'',spInvoiceValueMo:'',spInvoiceValue2526:'',spInvoiceValueAdditionalOrders:'',total2526:'',amountReceived:'',amountReceivedDate:'',amountPending:'',status:'',remarks:''},
+    booksPayment:{prekg:'',g1:'',lkg:'',lkgAdditionalOrders:'',lkgReturns:'',lkgRemarks:'',ukg:'',ukgAdditionalOrders:'',ukgReturns:'',ukgRemarks:'',lkgHhp:'',ukgHhp:'',deliveryDate:'',pyCredit:'',discount:'',discountG1:'',discountAdditionalOrders:'',discountReturns:'',discountRemarks:'',spInvoiceValueMo:'',spInvoiceValue2526:'',spInvoiceValueAdditionalOrders:'',total2526:'',amountReceived:'',amountReceivedDate:'',amountPending:'',status:'',remarks:''},
     deliverables1:{teachersCopy:'',teachersCopyDate:'',teachersManual1:'',teachersManual1Date:'',teachersManual2:'',teachersManual2Date:'',flashCards:'',flashCardsDate:''},
-    deliverables2:{whatsapp:'',whatsappDate:'',windowsApp:{appVersion:'',date:'',lkg:'',ukg:'',systemTvBoth:''},kidsApp:{appVersion:'',date:'',lkg:'',ukg:'',systemTvBoth:''},appComments:''},
+    deliverables2:{whatsapp:'',whatsappDate:'',windowsApp:{appVersion:'',date:'',prekg:'',lkg:'',ukg:'',g1:'',systemTvBoth:''},kidsApp:{appVersion:'',date:'',prekg:'',lkg:'',ukg:'',g1:'',systemTvBoth:''},appComments:''},
     deliverables3:{questionPaper:'',questionPaperDate:'',progressCard:'',progressCardDate:''},
     services:{t1:'',atu1:'',atu1Date:'',atu1Comments:'',sim1:'',sim1Date:'',sim1Comments:'',t2:'',atu2:'',atu2Date:'',atu2Comments:'',sim2:'',sim2Date:'',sim2Comments:'',t3:'',sim3:'',sim3Date:'',sim3Comments:''},
     currentStatus:'', comments:''
@@ -637,12 +844,31 @@ function importSchoolHistoryTemplate(cells, current) {
   const put=(path,value,date=false)=>{let v=normExcel(value);if(date)v=excelDateText(v);if(!v||v==='-'||v==='—')return;const ks=path.split('.');let o=out;for(const k of ks.slice(0,-1))o=o[k];o[ks.at(-1)]=v;};
   const inline=(v,label)=>normExcel(v).replace(new RegExp(`^${label.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}\\s*[:：]\\s*`,'i'),'').trim();
 
-  // Basic details: row 3 contains independent LABEL: VALUE cells.
+  // Basic details: support both combined cells (LOCATION: MADAMBAKKAM) and
+  // split cells (LOCATION: | Madambakkam). Do not depend on row/column position.
+  const basicLabels = new Set(['LOCATION','VINTAGE','BOOKS','CATEGORY']);
   for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){
-    const x=(rows.get(3)||[]).find(c=>new RegExp(`^${label}\\s*[:：]\\s*`, 'i').test(c.value));
-    if(x)put(key,inline(x.value,label));
+    let found='';
+    for(const xs of rows.values()){
+      for(let i=0;i<xs.length;i++){
+        const v=normExcel(xs[i].value);
+        const m=v.match(new RegExp(`^${label}\\s*[:：]\\s*(.*)$`, 'i'));
+        if(m && m[1].trim()){ found=m[1].trim(); break; }
+        if(new RegExp(`^${label}\\s*[:：]?$`, 'i').test(v)){
+          const next=xs.find(x=>x.col>xs[i].col && normExcel(x.value));
+          if(next){
+            const nv=normExcel(next.value);
+            const nextLabel=nv.match(/^([A-Z][A-Z ]*)\\s*[:：]/i)?.[1]?.trim().toUpperCase();
+            if(!nextLabel || !basicLabels.has(nextLabel)) found=nv.replace(/^[:：]\\s*/,'');
+          }
+          if(found) break;
+        }
+      }
+      if(found) break;
+    }
+    if(found) put(key,found);
   }
-  const schoolName=(rows.get(2)||[]).map(x=>x.value).find(Boolean)||'';
+  const schoolName=extractSchoolIdentity(cells).name || '';
 
   // Contacts: role in A, person in B, phone in C. Preserve nil/blank as blank.
   for(const [label,key,phoneKey] of [['CORRESPONDENT','correspondent','correspondentPhone'],['PRINCIPAL','principal','principalPhone'],['KEY PERSON','keyPerson','keyPersonPhone']]){
@@ -650,11 +876,19 @@ function importSchoolHistoryTemplate(cells, current) {
   }
 
   // Books & Payment — explicit row identity and explicit source columns.
+  for(const [label,key] of [['Pre-KG','prekg'],['G1','g1']]){const r=rowWith(label);if(r)put(`booksPayment.${key}`,cell(r,2));}
   for(const [label,key] of [['LKG','lkg'],['UKG','ukg']]){const r=rowWith(label);if(r){put(`booksPayment.${key}`,cell(r,2));put(`booksPayment.${key}AdditionalOrders`,cell(r,3));put(`booksPayment.${key}Returns`,cell(r,4));}}
   put('booksPayment.lkgHhp',cell(rowWith('LKG - HHP'),2)); put('booksPayment.ukgHhp',cell(rowWith('UKG - HHP'),2));
-  const del=rowWith('DELIVERY DATE');if(del){put('booksPayment.deliveryDate',cell(del,2),true);put('booksPayment.pyCredit',cell(del,5));}
-  put('booksPayment.discount',cell(rowWith('DISCOUNT'),2));
-  const inv=rowWith('SP INVOICE VALUE (MO)');if(inv){put('booksPayment.spInvoiceValueMo',cell(inv,2));put('booksPayment.total2526',cell(inv,6));}
+  const del=rowWith('DELIVERY DATE');if(del){put('booksPayment.deliveryDate',cell(del,2),true);put('booksPayment.deliveryDateAdditional',cell(del,3),true);put('booksPayment.pyCredit',cell(del,5));}
+  const discountRow=rowWith('DISCOUNT');
+  const lkgUkgDiscountRow=rowWith('LKG & UKG DISCOUNT');
+  if(discountRow) put('booksPayment.discount',cell(discountRow,2));
+  else if(lkgUkgDiscountRow) put('booksPayment.discount',cell(lkgUkgDiscountRow,2));
+  const g1DiscountRow=rowWith('DISCOUNT G1');
+  if(g1DiscountRow) put('booksPayment.discountG1',cell(g1DiscountRow,2));
+  const invLabelRows=['SP INVOICE VALUE (MO)','SP INVOICE VALUE (25-26)','SP INVOICE VALUE (26-27)'];
+  const inv=invLabelRows.map(rowWith).find(Boolean);
+  if(inv){put('booksPayment.spInvoiceValueMo',cell(inv,2));put('booksPayment.total2526',cell(inv,6));}
   const ao=rowWith('SP INVOICE VALUE (AO)');if(ao)put('booksPayment.spInvoiceValueAdditionalOrders',cell(ao,4));
   const rec=rowWith('AMOUNT RECEIVED');if(rec){put('booksPayment.amountReceived',cell(rec,2));put('booksPayment.amountReceivedDate',cell(rec,4),true);}
   const pend=rowWith('AMOUNT PENDING');if(pend){put('booksPayment.amountPending',cell(pend,2));put('booksPayment.status',cell(pend,4));}
@@ -665,17 +899,50 @@ function importSchoolHistoryTemplate(cells, current) {
   // Deliverables 1 — exact rows and B=Count, C=Date.
   for(const [label,key] of [['Teachers Copy','teachersCopy'],['Teachers Manual','teachersManual1'],['Teachers Manual 1','teachersManual1'],['Teachers Manual 2','teachersManual2'],['Flash Card','flashCards'],['Flash Cards','flashCards']]){const r=rowWith(label);if(r){put(`deliverables1.${key}`,cell(r,2));put(`deliverables1.${key}Date`,cell(r,3),true);}}
 
-  // Deliverables 2 — exact rows. Windows App Comments has its own row.
+  // Deliverables 2 — header-driven because different school files place DATE
+  // and the class columns in different positions. Never assume B/C/D/E.
   const wa=rowWith('WhatsApp');if(wa){put('deliverables2.whatsapp',cell(wa,2));put('deliverables2.whatsappDate',cell(wa,3),true);}
-  const win=rowWith('Windows App');if(win){put('deliverables2.windowsApp.appVersion',cell(win,2));put('deliverables2.windowsApp.date',cell(win,3),true);put('deliverables2.windowsApp.lkg',cell(win,4));put('deliverables2.windowsApp.ukg',cell(win,5));put('deliverables2.windowsApp.systemTvBoth',cell(win,6));}
-  const kids=rowWith('Kids App');if(kids){put('deliverables2.kidsApp.appVersion',cell(kids,2));put('deliverables2.kidsApp.date',cell(kids,3),true);put('deliverables2.kidsApp.systemTvBoth',cell(kids,4));}
+  const appData=(row,label)=>{
+    if(!row)return {};
+    let header=null;
+    for(let rr=row-1;rr>=Math.max(1,row-3);rr--){
+      const xs=rows.get(rr)||[];
+      const labels=xs.map(x=>clean(x.value));
+      if(labels.includes('date') && (labels.includes('lkg')||labels.includes('ukg')||labels.includes('system / tv / both')||labels.includes('system/tv/both'))){header=xs;break;}
+    }
+    const colBy=(tests,fallback)=>{const h=header?.find(x=>tests.some(t=>t.test(clean(x.value))));return h?.col ?? fallback;};
+    const dateCol=colBy([/^date$/],2);
+    const lkgCol=colBy([/^lkg$/],4);
+    const ukgCol=colBy([/^ukg$/],5);
+    const g1Col=colBy([/^g1$/],6);
+    const prekgCol=colBy([/^prekg$/],3);
+    const systemCol=colBy([/^system \/ tv \/ both$/,/^system\s*\/\s*tv\s*\/\s*both$/,/^system$/],7);
+    return {date:cell(row,dateCol),lkg:cell(row,lkgCol),ukg:cell(row,ukgCol),g1:cell(row,g1Col),prekg:cell(row,prekgCol),system:cell(row,systemCol),legacyVersion:header?cell(row,2):cell(row,2)};
+  };
+  const win=rowWith('Windows App');
+  if(win){const d=appData(win,'Windows App');put('deliverables2.windowsApp.date',d.date,true);put('deliverables2.windowsApp.prekg',d.prekg);put('deliverables2.windowsApp.lkg',d.lkg);put('deliverables2.windowsApp.ukg',d.ukg);put('deliverables2.windowsApp.g1',d.g1);put('deliverables2.windowsApp.systemTvBoth',d.system);if(!d.date && d.legacyVersion)put('deliverables2.windowsApp.appVersion',d.legacyVersion);}
+  const kids=rowWith('Kids App');
+  if(kids){const d=appData(kids,'Kids App');put('deliverables2.kidsApp.date',d.date,true);put('deliverables2.kidsApp.prekg',d.prekg);put('deliverables2.kidsApp.lkg',d.lkg);put('deliverables2.kidsApp.ukg',d.ukg);put('deliverables2.kidsApp.g1',d.g1);put('deliverables2.kidsApp.systemTvBoth',d.system);if(!d.date && d.legacyVersion)put('deliverables2.kidsApp.appVersion',d.legacyVersion);}
   const wc=rowWith('Windows App Comments');if(wc)put('deliverables2.appComments',cell(wc,2));
 
   for(const [label,key] of [['Question Paper','questionPaper'],['Progress Card','progressCard']]){const r=rowWith(label);if(r){put(`deliverables3.${key}`,cell(r,2));put(`deliverables3.${key}Date`,cell(r,3),true);}}
 
   // Services — retain name/value, date and every dedicated comment row.
-  for(const [label,key] of [['T1','t1'],['ATU 1','atu1'],['SIM 1','sim1'],['T2','t2'],['ATU 2','atu2'],['SIM 2','sim2'],['T3','t3'],['SIM 3','sim3']]){const r=rowWith(label);if(r){put(`services.${key}`,cell(r,2));if(/^(atu1|sim1|atu2|sim2|sim3)$/.test(key))put(`services.${key}Date`,cell(r,3),true);}}
-  for(const [label,key] of [['ATU 1 COMMENTS','atu1Comments'],['SIM 1 COMMENTS','sim1Comments'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2 COMMENTS','sim2Comments'],['SIM 3 COMMENTS','sim3Comments']]){const r=rowWith(label);if(r)put(`services.${key}`,cell(r,2));}
+  for(const [label,key] of [['T1','t1'],['ATU 1','atu1'],['SIM 1','sim1'],['T2','t2'],['General Visit','generalVisit'],['ATU 2','atu2'],['SIM 2','sim2'],['T3','t3'],['SIM 3','sim3']]){const r=rowWith(label);if(r){put(`services.${key}`,cell(r,2));if(/^(atu1|sim1|atu2|sim2|sim3)$/.test(key))put(`services.${key}Date`,cell(r,3),true);}}
+  const serviceRows=[];
+  for(const [r,xs] of rows){
+    const label=clean(xs[0]?.value || '');
+    const map={'t1':'t1','atu 1':'atu1','sim 1':'sim1','t2':'t2','general visit':'generalVisit','atu 2':'atu2','sim 2':'sim2','t3':'t3','sim 3':'sim3'};
+    if(map[label]) serviceRows.push({row:r,key:map[label]});
+  }
+  for(const [label,defaultKey] of [['ATU 1 COMMENTS','atu1Comments'],['SIM 1 COMMENTS','sim1Comments'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2 COMMENTS','sim2Comments'],['SIM 3 COMMENTS','sim3Comments']]){
+    for(const [r,xs] of rows){
+      if(!xs.some(x=>clean(x.value)===clean(label))) continue;
+      const prior=serviceRows.filter(x=>x.row<r).at(-1);
+      const key=(prior && (prior.key.startsWith('atu') || prior.key.startsWith('sim'))) ? `${prior.key}Comments` : defaultKey;
+      put(`services.${key}`,cell(r,2));
+    }
+  }
   put('currentStatus',cell(rowWith('CURRENT STATUS'),2));
   // The final COMMENTS row is after CURRENT STATUS. Using the last matching row avoids
   // accidentally reading the blank Books & Payment comments row.
@@ -692,9 +959,9 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
   const contactItems=[['Correspondent','contacts.correspondent','contacts.correspondentPhone'],['Principal','contacts.principal','contacts.principalPhone'],['Key Person','contacts.keyPerson','contacts.keyPersonPhone']].map(([label,n,p])=>({label,name:String(getPath(initial,n)).trim(),phone:String(getPath(initial,p)).trim()})).filter(x=>x.name||x.phone);
   return <div style={{position:'relative',marginBottom:isPhone?24:40,padding:isPhone?12:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub,overflow:'hidden'}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2025–2026 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2026–2027 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
     {!filled ? <M style={{fontSize:13,color:T.mute}}>{readOnly ? 'No history details entered yet.' : 'No history details entered yet. Use the corner edit button to add the school record.'}</M> : historySections.map(([title,fields])=>{
-      const vals=fields.map(([path,label])=>[path,label,String(getPath(initial,path)).trim()]).filter(([, ,v])=>v);
+      const vals=fields.map(([path,label])=>[path,label,historyDisplayValue(path,getPath(initial,path))]).filter(([, ,v])=>v);
       if(!vals.length)return null;
       return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}>
         <div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>
@@ -737,8 +1004,8 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
       </div>
     })}
     {!readOnly && editing && <div className="fade" style={{position:'fixed',inset:0,zIndex:80,background:T.overlay,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}><div className="rise" style={{width:'100%',maxWidth:720,maxHeight:'92vh',overflowY:'auto',background:T.bg,border:`1px solid ${T.line}`,borderRadius:14,padding:22}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2025–2026</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
-      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2025–2026 School History format and fills the form. You can edit anything before saving.</span></div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}><div><div className="tight" style={{fontSize:20,fontWeight:600}}>Edit School History</div><M style={{fontSize:12,color:T.mute}}>{school.name} · 2026–2027</M></div><button onClick={()=>setEditing(false)} style={{background:'none',border:'none',color:T.faint,fontSize:20,cursor:'pointer'}}>×</button></div>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:18,flexWrap:'wrap'}}><label className="press" style={{display:'inline-flex',alignItems:'center',gap:7,padding:'8px 12px',borderRadius:8,border:`1px solid ${T.line}`,cursor:importing?'wait':'pointer',fontSize:12,color:T.text}}><span>Import Excel</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importExcel} disabled={importing} style={{display:'none'}}/></label><span style={{fontSize:12,color:T.faint}}>Imports the supplied 2026–2027 School History format and fills the form. You can edit anything before saving.</span></div>
       {historySections.map(([title,fields])=><div key={title} style={{marginBottom:22}}><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint,marginBottom:10}}>{title}</div><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:12}}>{fields.map(([path,label])=><div key={path} style={{gridColumn:/comments|remarks|appComments/i.test(label)?'1 / -1':undefined}}><label style={{fontSize:11,color:T.mute,display:'block',marginBottom:5}}>{label}</label>{/comments|remarks/i.test(label)?<textarea rows={3} value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,fontFamily:'inherit',resize:'vertical'}}/>:<input value={getPath(draft,path)} onChange={e=>setDraft(setPath(draft,path,e.target.value))} style={{width:'100%',boxSizing:'border-box',padding:'9px 10px',borderRadius:8,border:`1px solid ${T.line}`,background:'transparent',color:T.text,outline:'none'}}/>}</div>)}</div></div>)}
       {problem&&<div style={{color:T.accent,fontSize:13,marginBottom:12}}>{problem.message}</div>}<div style={{display:'flex',gap:8}}><Btn variant="line" onClick={()=>setEditing(false)}>Cancel</Btn><Btn busy={busy} onClick={save}>{busy?'Saving…':'Save History'}</Btn></div>
     </div></div>}
@@ -850,12 +1117,12 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const latOk = blank || (Number.isFinite(lat) && lat >= -90 && lat <= 90 && String(f.latitude).trim() !== '');
   const lngOk = blank || (Number.isFinite(lng) && lng >= -180 && lng <= 180 && String(f.longitude).trim() !== '');
   const radiusOk = Number.isInteger(radius) && radius >= 20 && radius <= 2000;
-  const incomplete = !f.name.trim() || !f.zone.trim() || !latOk || !lngOk || !radiusOk;
+  const incomplete = !f.name.trim() || !latOk || !lngOk || !radiusOk;
 
   const submit = async () => {
     setBusy(true); setProblem(null);
     const body = {
-      name: f.name.trim(), zone: f.zone.trim(),
+      name: f.name.trim(), zone: f.zone.trim() ? f.zone.trim() : null,
       ...(f.address.trim() ? { address: f.address.trim() } : {}),
       ...(f.contactPerson.trim() ? { contactPerson: f.contactPerson.trim() } : {}),
       ...(f.contactDesignation.trim() ? { contactDesignation: f.contactDesignation.trim() } : {}),

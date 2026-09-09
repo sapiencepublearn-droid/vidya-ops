@@ -211,6 +211,18 @@ async function permittedSites(actor) {
   }));
 }
 
+async function schoolVisitSites(actor, role) {
+  if (role === 'Technical Support') {
+    const { rows } = await tx(actor, (c) => c.query(
+      `SELECT location_id, kind, name, zone, latitude, longitude, radius_metres
+         FROM locations
+        WHERE kind='school' AND is_active AND latitude IS NOT NULL AND longitude IS NOT NULL
+        ORDER BY zone, name`));
+    return rows.map((r) => ({ id:r.location_id, kind:r.kind, name:r.name, zone:r.zone, lat:Number(r.latitude), lng:Number(r.longitude), radius:r.radius_metres }));
+  }
+  return (await permittedSites(actor)).filter((s) => s.kind === 'school');
+}
+
 /**
  * The server decides where the employee is. The client only reports GPS.
  *
@@ -408,7 +420,7 @@ router.get('/attendance/school-visits/today', wrap(async (req, res) => {
     `SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
   if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') return res.json({ schools: [], active: null, visits: [] });
 
-  const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const sites = await schoolVisitSites(req.user, emp.role);
   const { rows } = await tx(req.user, (c) => c.query(
     `SELECT v.*, l.name AS school_name, l.zone AS school_zone
        FROM school_visits v JOIN locations l ON l.location_id=v.location_id
@@ -425,9 +437,9 @@ router.post('/attendance/school-visits/check-in', idempotent(wrap(async (req, re
   const f = parse(fixSchema.extend({ locationId: uuid }).strict(), req.body);
   const emp = (await tx(req.user, (c) => c.query(`SELECT role FROM employees WHERE employee_id=$1`, [req.user.id]))).rows[0];
   if (emp.role !== 'Trainer' && emp.role !== 'Technical Support') throw forbidden('School visits are available only to trainers and technical support.');
-  const sites = (await permittedSites(req.user)).filter((s) => s.kind === 'school');
+  const sites = await schoolVisitSites(req.user, emp.role);
   const site = sites.find((s) => s.id === f.locationId);
-  if (!site) throw forbidden('That school is not assigned to you today.', 'school_not_assigned');
+  if (!site) throw forbidden(emp.role === 'Technical Support' ? 'That school is not available for a school visit.' : 'That school is not assigned to you today.', 'school_not_available');
   const { distance } = verifyFix([site], f);
   const row = await tx(req.user, async (c) => {
     const activeAttendance = (await c.query(
@@ -537,7 +549,7 @@ router.get('/admin/attendance', adminOnly, wrap(async (req, res) => {
 // it. Zod refuses .partial() on a schema carrying refinements.
 const schoolFields = z.object({
   name: z.string().trim().min(1).max(120),
-  zone: z.string().trim().min(1).max(80),
+  zone: z.string().trim().max(80).nullable().optional(),
   address: z.string().trim().max(400).optional(),
   contactPerson: z.string().trim().max(120).optional(),
   contactDesignation: z.string().trim().max(120).optional(),
@@ -603,95 +615,104 @@ router.get('/schools/:id', uuidParam('id'), wrap(async (req, res) => {
 }));
 
 const schoolHistorySchema = z.object({
-  location: z.string().trim().max(200).optional().nullable(),
-  vintage: z.string().trim().max(120).optional().nullable(),
-  books: z.string().trim().max(120).optional().nullable(),
-  category: z.string().trim().max(120).optional().nullable(),
+  location: z.coerce.string().trim().max(200).optional().nullable(),
+  vintage: z.coerce.string().trim().max(120).optional().nullable(),
+  books: z.coerce.string().trim().max(120).optional().nullable(),
+  category: z.coerce.string().trim().max(120).optional().nullable(),
   contacts: z.object({
-    correspondent: z.string().trim().max(160).optional().nullable(),
-    correspondentPhone: z.string().trim().max(40).optional().nullable(),
-    principal: z.string().trim().max(160).optional().nullable(),
-    principalPhone: z.string().trim().max(40).optional().nullable(),
-    keyPerson: z.string().trim().max(160).optional().nullable(),
-    keyPersonPhone: z.string().trim().max(40).optional().nullable(),
+    correspondent: z.coerce.string().trim().max(160).optional().nullable(),
+    correspondentPhone: z.coerce.string().trim().max(40).optional().nullable(),
+    principal: z.coerce.string().trim().max(160).optional().nullable(),
+    principalPhone: z.coerce.string().trim().max(40).optional().nullable(),
+    keyPerson: z.coerce.string().trim().max(160).optional().nullable(),
+    keyPersonPhone: z.coerce.string().trim().max(40).optional().nullable(),
   }).default({}),
   booksPayment: z.object({
-    lkg: z.string().trim().max(120).optional().nullable(),
-    lkgHhp: z.string().trim().max(120).optional().nullable(),
-    ukgHhp: z.string().trim().max(120).optional().nullable(),
-    deliveryDate: z.string().trim().max(40).optional().nullable(),
-    pyCredit: z.string().trim().max(120).optional().nullable(),
-    spInvoiceValueMo: z.string().trim().max(120).optional().nullable(),
-    total2526: z.string().trim().max(120).optional().nullable(),
-    lkgAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    lkgReturns: z.string().trim().max(120).optional().nullable(),
-    lkgRemarks: z.string().trim().max(500).optional().nullable(),
-    ukg: z.string().trim().max(120).optional().nullable(),
-    ukgAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    ukgReturns: z.string().trim().max(120).optional().nullable(),
-    ukgRemarks: z.string().trim().max(500).optional().nullable(),
-    discount: z.string().trim().max(120).optional().nullable(),
-    discountAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    discountReturns: z.string().trim().max(120).optional().nullable(),
-    discountRemarks: z.string().trim().max(500).optional().nullable(),
-    spInvoiceValue2526: z.string().trim().max(120).optional().nullable(),
-    spInvoiceValueAdditionalOrders: z.string().trim().max(120).optional().nullable(),
-    amountReceived: z.string().trim().max(120).optional().nullable(),
-    amountReceivedDate: z.string().trim().max(40).optional().nullable(),
-    amountPending: z.string().trim().max(120).optional().nullable(),
-    status: z.string().trim().max(120).optional().nullable(),
-    remarks: z.string().trim().max(500).optional().nullable(),
+    prekg: z.coerce.string().trim().max(120).optional().nullable(),
+    g1: z.coerce.string().trim().max(120).optional().nullable(),
+    lkg: z.coerce.string().trim().max(120).optional().nullable(),
+    lkgHhp: z.coerce.string().trim().max(120).optional().nullable(),
+    ukgHhp: z.coerce.string().trim().max(120).optional().nullable(),
+    deliveryDate: z.coerce.string().trim().max(40).optional().nullable(),
+    deliveryDateAdditional: z.coerce.string().trim().max(40).optional().nullable(),
+    pyCredit: z.coerce.string().trim().max(120).optional().nullable(),
+    spInvoiceValueMo: z.coerce.string().trim().max(120).optional().nullable(),
+    total2526: z.coerce.string().trim().max(120).optional().nullable(),
+    lkgAdditionalOrders: z.coerce.string().trim().max(120).optional().nullable(),
+    lkgReturns: z.coerce.string().trim().max(120).optional().nullable(),
+    lkgRemarks: z.coerce.string().trim().max(500).optional().nullable(),
+    ukg: z.coerce.string().trim().max(120).optional().nullable(),
+    ukgAdditionalOrders: z.coerce.string().trim().max(120).optional().nullable(),
+    ukgReturns: z.coerce.string().trim().max(120).optional().nullable(),
+    ukgRemarks: z.coerce.string().trim().max(500).optional().nullable(),
+    discount: z.coerce.string().trim().max(120).optional().nullable(),
+    discountG1: z.coerce.string().trim().max(120).optional().nullable(),
+    discountAdditionalOrders: z.coerce.string().trim().max(120).optional().nullable(),
+    discountReturns: z.coerce.string().trim().max(120).optional().nullable(),
+    discountRemarks: z.coerce.string().trim().max(500).optional().nullable(),
+    spInvoiceValue2526: z.coerce.string().trim().max(120).optional().nullable(),
+    spInvoiceValueAdditionalOrders: z.coerce.string().trim().max(120).optional().nullable(),
+    amountReceived: z.coerce.string().trim().max(120).optional().nullable(),
+    amountReceivedDate: z.coerce.string().trim().max(40).optional().nullable(),
+    amountPending: z.coerce.string().trim().max(120).optional().nullable(),
+    status: z.coerce.string().trim().max(120).optional().nullable(),
+    remarks: z.coerce.string().trim().max(500).optional().nullable(),
   }).default({}),
   deliverables1: z.object({
-    teachersCopy: z.string().trim().max(120).optional().nullable(),
-    teachersManual1: z.string().trim().max(120).optional().nullable(),
-    teachersManual2: z.string().trim().max(120).optional().nullable(),
-    flashCards: z.string().trim().max(120).optional().nullable(),
-    teachersCopyDate: z.string().trim().max(40).optional().nullable(),
-    teachersManual1Date: z.string().trim().max(40).optional().nullable(),
-    teachersManual2Date: z.string().trim().max(40).optional().nullable(),
-    flashCardsDate: z.string().trim().max(40).optional().nullable(),
+    teachersCopy: z.coerce.string().trim().max(120).optional().nullable(),
+    teachersManual1: z.coerce.string().trim().max(120).optional().nullable(),
+    teachersManual2: z.coerce.string().trim().max(120).optional().nullable(),
+    flashCards: z.coerce.string().trim().max(120).optional().nullable(),
+    teachersCopyDate: z.coerce.string().trim().max(40).optional().nullable(),
+    teachersManual1Date: z.coerce.string().trim().max(40).optional().nullable(),
+    teachersManual2Date: z.coerce.string().trim().max(40).optional().nullable(),
+    flashCardsDate: z.coerce.string().trim().max(40).optional().nullable(),
   }).default({}),
   deliverables2: z.object({
-    whatsapp: z.string().trim().max(120).optional().nullable(),
-    whatsappDate: z.string().trim().max(40).optional().nullable(),
-    windowsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
-    kidsApp: z.object({ appVersion: z.string().trim().max(120).optional().nullable(), date: z.string().trim().max(40).optional().nullable(), lkg: z.string().trim().max(120).optional().nullable(), ukg: z.string().trim().max(120).optional().nullable(), systemTvBoth: z.string().trim().max(120).optional().nullable() }).default({}),
-    appComments: z.string().trim().max(1000).optional().nullable(),
+    whatsapp: z.coerce.string().trim().max(120).optional().nullable(),
+    whatsappDate: z.coerce.string().trim().max(40).optional().nullable(),
+    windowsApp: z.object({ appVersion: z.coerce.string().trim().max(120).optional().nullable(), date: z.coerce.string().trim().max(40).optional().nullable(), prekg: z.coerce.string().trim().max(120).optional().nullable(), lkg: z.coerce.string().trim().max(120).optional().nullable(), ukg: z.coerce.string().trim().max(120).optional().nullable(), g1: z.coerce.string().trim().max(120).optional().nullable(), systemTvBoth: z.coerce.string().trim().max(120).optional().nullable() }).default({}),
+    kidsApp: z.object({ appVersion: z.coerce.string().trim().max(120).optional().nullable(), date: z.coerce.string().trim().max(40).optional().nullable(), prekg: z.coerce.string().trim().max(120).optional().nullable(), lkg: z.coerce.string().trim().max(120).optional().nullable(), ukg: z.coerce.string().trim().max(120).optional().nullable(), g1: z.coerce.string().trim().max(120).optional().nullable(), systemTvBoth: z.coerce.string().trim().max(120).optional().nullable() }).default({}),
+    appComments: z.coerce.string().trim().max(10000).optional().nullable(),
   }).default({}),
   deliverables3: z.object({
-    questionPaper: z.string().trim().max(120).optional().nullable(),
-    progressCard: z.string().trim().max(120).optional().nullable(),
-    questionPaperDate: z.string().trim().max(40).optional().nullable(),
-    progressCardDate: z.string().trim().max(40).optional().nullable(),
+    questionPaper: z.coerce.string().trim().max(120).optional().nullable(),
+    progressCard: z.coerce.string().trim().max(120).optional().nullable(),
+    questionPaperDate: z.coerce.string().trim().max(40).optional().nullable(),
+    progressCardDate: z.coerce.string().trim().max(40).optional().nullable(),
   }).default({}),
   services: z.object({
-    t1: z.string().trim().max(120).optional().nullable(),
-    atu1: z.string().trim().max(120).optional().nullable(),
-    atu1Date: z.string().trim().max(40).optional().nullable(),
-    atu1Comments: z.string().trim().max(1000).optional().nullable(),
-    sim1: z.string().trim().max(120).optional().nullable(),
-    sim1Date: z.string().trim().max(40).optional().nullable(),
-    sim1Comments: z.string().trim().max(1000).optional().nullable(),
-    t2: z.string().trim().max(120).optional().nullable(),
-    generalVisit: z.string().trim().max(120).optional().nullable(),
-    atu2: z.string().trim().max(120).optional().nullable(),
-    atu2Date: z.string().trim().max(40).optional().nullable(),
-    atu2Comments: z.string().trim().max(1000).optional().nullable(),
-    sim2: z.string().trim().max(120).optional().nullable(),
-    sim2Date: z.string().trim().max(40).optional().nullable(),
-    sim2Comments: z.string().trim().max(1000).optional().nullable(),
-    t3: z.string().trim().max(120).optional().nullable(),
-    sim3: z.string().trim().max(120).optional().nullable(),
-    sim3Date: z.string().trim().max(40).optional().nullable(),
-    sim3Comments: z.string().trim().max(1000).optional().nullable(),
+    t1: z.coerce.string().trim().max(120).optional().nullable(),
+    atu1: z.coerce.string().trim().max(120).optional().nullable(),
+    atu1Date: z.coerce.string().trim().max(40).optional().nullable(),
+    atu1Comments: z.coerce.string().trim().max(10000).optional().nullable(),
+    sim1: z.coerce.string().trim().max(120).optional().nullable(),
+    sim1Date: z.coerce.string().trim().max(40).optional().nullable(),
+    sim1Comments: z.coerce.string().trim().max(10000).optional().nullable(),
+    t2: z.coerce.string().trim().max(120).optional().nullable(),
+    generalVisit: z.coerce.string().trim().max(120).optional().nullable(),
+    atu2: z.coerce.string().trim().max(120).optional().nullable(),
+    atu2Date: z.coerce.string().trim().max(40).optional().nullable(),
+    atu2Comments: z.coerce.string().trim().max(10000).optional().nullable(),
+    sim2: z.coerce.string().trim().max(120).optional().nullable(),
+    sim2Date: z.coerce.string().trim().max(40).optional().nullable(),
+    sim2Comments: z.coerce.string().trim().max(10000).optional().nullable(),
+    t3: z.coerce.string().trim().max(120).optional().nullable(),
+    sim3: z.coerce.string().trim().max(120).optional().nullable(),
+    sim3Date: z.coerce.string().trim().max(40).optional().nullable(),
+    sim3Comments: z.coerce.string().trim().max(10000).optional().nullable(),
   }).default({}),
-  currentStatus: z.string().trim().max(300).optional().nullable(),
-  comments: z.string().trim().max(2000).optional().nullable(),
+  currentStatus: z.coerce.string().trim().max(300).optional().nullable(),
+  comments: z.coerce.string().trim().max(2000).optional().nullable(),
 }).strict();
 
 router.put('/admin/schools/:id/history', adminOnly, uuidParam('id'), idempotent(wrap(async (req, res) => {
   const f = parse(schoolHistorySchema, req.body);
+  // Keep imported/manual history canonical even if an older client sends a
+  // previously-corrupted labelled value.
+  if (typeof f.vintage === 'string' && /^CATEGORY\s*[:：]/i.test(f.vintage)) f.vintage = null;
+  if (typeof f.books === 'string' && /^CATEGORY\s*[:：]/i.test(f.books)) f.books = null;
+  if (typeof f.category === 'string') f.category = f.category.replace(/^CATEGORY\s*[:：]\s*/i, '').trim();
   const row = (await pool.query(
     `UPDATE locations SET school_history=$2, updated_at=now() WHERE location_id=$1 AND kind='school' RETURNING location_id, school_history`,
     [req.params.id, JSON.stringify(f)])).rows[0];
@@ -809,6 +830,32 @@ router.patch('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(a
        settingCoords ? req.user.id : null, settingCoords ? new Date() : null])).rows[0];
   }, { reason: f.isActive === false ? 'school deactivated' : 'school updated' });
   res.json(out);
+})));
+
+router.delete('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(async (req, res) => {
+  const out = await tx(req.user, async (c) => {
+    const cur = (await c.query(
+      `SELECT location_id, name, kind, is_active FROM locations WHERE location_id=$1 AND kind='school' FOR UPDATE`,
+      [req.params.id])).rows[0];
+    if (!cur) throw notFound('That school does not exist.');
+
+    // A school may be permanently removed only when no operational/history
+    // record points to it. The imported School History JSON is safe to remove
+    // with the school; attendance, visits and assignments are not.
+    const refs = (await c.query(
+      `SELECT
+         (SELECT count(*)::int FROM attendance WHERE check_in_location_id=$1 OR check_out_location_id=$1) AS attendance_refs,
+         (SELECT count(*)::int FROM school_visits WHERE location_id=$1) AS visit_refs,
+         (SELECT count(*)::int FROM trainer_assignments WHERE location_id=$1) AS assignment_refs`,
+      [req.params.id])).rows[0];
+    if (refs.attendance_refs || refs.visit_refs || refs.assignment_refs) {
+      throw conflict('This school has attendance, visit, or assignment records. Mark it Inactive instead of deleting it.', 'school_has_history');
+    }
+
+    await c.query(`DELETE FROM locations WHERE location_id=$1 AND kind='school'`, [req.params.id]);
+    return cur;
+  }, { reason: 'school permanently deleted' });
+  res.json({ deleted: true, school: out });
 })));
 
 /**
