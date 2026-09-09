@@ -181,6 +181,9 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
         const existing = schoolsByKey.get(key);
         let school;
         if (existing) {
+          // Save the history first. If the Excel data is invalid, do not leave
+          // a half-updated School Master record behind.
+          await api.admin.updateSchoolHistory(existing.location_id, history, newActionKey());
           school = await api.admin.updateSchool(existing.location_id, {
             name,
             zone: null,
@@ -189,7 +192,6 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
             ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
             ...(phone ? { contactPhone: phone } : {}),
           }, newActionKey());
-          await api.admin.updateSchoolHistory(existing.location_id, history, newActionKey());
           schoolsByKey.set(key, { ...existing, ...school });
           results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: address });
         } else {
@@ -201,12 +203,20 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
             radiusMetres: 100,
             isActive: true,
           }, newActionKey());
-          await api.admin.updateSchoolHistory(school.location_id, history, newActionKey());
+          try {
+            await api.admin.updateSchoolHistory(school.location_id, history, newActionKey());
+          } catch (historyError) {
+            // A newly created school has no attendance/visit/assignment refs,
+            // so it is safe to roll it back if its history cannot be saved.
+            try { await api.admin.deleteSchool(school.location_id, newActionKey()); } catch { /* keep original error */ }
+            throw historyError;
+          }
           schoolsByKey.set(key, school);
           results.push({ file: file.name, sheet: candidate.ws.name, status: 'created', name, location: address });
         }
       } catch (e) {
-        results.push({ file: file.name, sheet: candidate.ws.name, status: 'error', name: candidate.name, message: e.message || 'Import failed.' });
+        const detail = Array.isArray(e.details) && e.details.length ? ` ${e.details.map(d => `${d.field}: ${d.message}`).join('; ')}` : '';
+        results.push({ file: file.name, sheet: candidate.ws.name, status: 'error', name: candidate.name, message: `${e.message || 'Import failed.'}${detail}` });
       }
     }
     if (!candidates.length) results.push({ file: file.name, status: 'skipped', message: 'No usable school sheet found. The importer expects a school name and LOCATION field.' });
@@ -601,12 +611,24 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 /* ──────────────────────────────────────────────────── add and edit */
 
 
+function historyDisplayValue(path, value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if ((path === 'vintage' || path === 'books') && /^CATEGORY\s*[:：]/i.test(raw)) return '';
+  if (path === 'category') return raw.replace(/^CATEGORY\s*[:：]\s*/i, '').trim();
+  if (path === 'booksPayment.discount' || path === 'booksPayment.discountG1' || /\.discount(?:G1)?$/.test(path)) {
+    const n = Number(raw.replace(/%$/,''));
+    if (Number.isFinite(n) && n >= 0 && n <= 1) return `${Math.round(n * 100)}%`;
+  }
+  return raw;
+}
+
 const historySections = [
-  ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
-  ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
+  ['Books & Payment', [['booksPayment.prekg','Pre-KG — Initial Count'], ['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.g1','G1 — Initial Count'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.deliveryDateAdditional','Additional Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.discountG1','Discount — G1'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
   ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual — Count'], ['deliverables1.teachersManual1Date','Teachers Manual — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Card — Count'], ['deliverables1.flashCardsDate','Flash Card — Date']]],
-  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Count / Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App Comments']]],
+  ['Deliverables 2', [['deliverables2.whatsapp','WhatsApp — Count'], ['deliverables2.whatsappDate','WhatsApp — Date'], ['deliverables2.windowsApp.appVersion','Windows App — Version'], ['deliverables2.windowsApp.date','Windows App — Date'], ['deliverables2.windowsApp.prekg','Windows App — Pre-KG'], ['deliverables2.windowsApp.lkg','Windows App — LKG'], ['deliverables2.windowsApp.ukg','Windows App — UKG'], ['deliverables2.windowsApp.g1','Windows App — G1'], ['deliverables2.windowsApp.systemTvBoth','Windows App — System / TV / Both'], ['deliverables2.kidsApp.appVersion','Kids App — Count / Version'], ['deliverables2.kidsApp.date','Kids App — Date'], ['deliverables2.kidsApp.prekg','Kids App — Pre-KG'], ['deliverables2.kidsApp.lkg','Kids App — LKG'], ['deliverables2.kidsApp.ukg','Kids App — UKG'], ['deliverables2.kidsApp.g1','Kids App — G1'], ['deliverables2.kidsApp.systemTvBoth','Kids App — System / TV / Both'], ['deliverables2.appComments','Windows App Comments']]],
   ['Deliverables 3', [['deliverables3.questionPaper','Question Paper — Count'], ['deliverables3.questionPaperDate','Question Paper — Date'], ['deliverables3.progressCard','Progress Card — Count'], ['deliverables3.progressCardDate','Progress Card — Date']]],
   ['Services', [['services.t1','T1'], ['services.atu1','ATU 1'], ['services.atu1Date','ATU 1 — Date'], ['services.atu1Comments','ATU 1 — Comments'], ['services.sim1','SIM 1'], ['services.sim1Date','SIM 1 — Date'], ['services.sim1Comments','SIM 1 — Comments'], ['services.t2','T2'], ['services.atu2','ATU 2'], ['services.atu2Date','ATU 2 — Date'], ['services.atu2Comments','ATU 2 — Comments'], ['services.sim2','SIM 2'], ['services.sim2Date','SIM 2 — Date'], ['services.sim2Comments','SIM 2 — Comments'], ['services.t3','T3'], ['services.sim3','SIM 3'], ['services.sim3Date','SIM 3 — Date'], ['services.sim3Comments','SIM 3 — Comments']]],
   ['Current status', [['currentStatus','Current Status'], ['comments','Comments']]],
@@ -806,9 +828,9 @@ function importSchoolHistoryTemplate(cells, current) {
   const out = {
     location:'', vintage:'', books:'', category:'',
     contacts:{correspondent:'',correspondentPhone:'',principal:'',principalPhone:'',keyPerson:'',keyPersonPhone:''},
-    booksPayment:{lkg:'',lkgAdditionalOrders:'',lkgReturns:'',lkgRemarks:'',ukg:'',ukgAdditionalOrders:'',ukgReturns:'',ukgRemarks:'',lkgHhp:'',ukgHhp:'',deliveryDate:'',pyCredit:'',discount:'',discountAdditionalOrders:'',discountReturns:'',discountRemarks:'',spInvoiceValueMo:'',spInvoiceValue2526:'',spInvoiceValueAdditionalOrders:'',total2526:'',amountReceived:'',amountReceivedDate:'',amountPending:'',status:'',remarks:''},
+    booksPayment:{prekg:'',g1:'',lkg:'',lkgAdditionalOrders:'',lkgReturns:'',lkgRemarks:'',ukg:'',ukgAdditionalOrders:'',ukgReturns:'',ukgRemarks:'',lkgHhp:'',ukgHhp:'',deliveryDate:'',pyCredit:'',discount:'',discountG1:'',discountAdditionalOrders:'',discountReturns:'',discountRemarks:'',spInvoiceValueMo:'',spInvoiceValue2526:'',spInvoiceValueAdditionalOrders:'',total2526:'',amountReceived:'',amountReceivedDate:'',amountPending:'',status:'',remarks:''},
     deliverables1:{teachersCopy:'',teachersCopyDate:'',teachersManual1:'',teachersManual1Date:'',teachersManual2:'',teachersManual2Date:'',flashCards:'',flashCardsDate:''},
-    deliverables2:{whatsapp:'',whatsappDate:'',windowsApp:{appVersion:'',date:'',lkg:'',ukg:'',systemTvBoth:''},kidsApp:{appVersion:'',date:'',lkg:'',ukg:'',systemTvBoth:''},appComments:''},
+    deliverables2:{whatsapp:'',whatsappDate:'',windowsApp:{appVersion:'',date:'',prekg:'',lkg:'',ukg:'',g1:'',systemTvBoth:''},kidsApp:{appVersion:'',date:'',prekg:'',lkg:'',ukg:'',g1:'',systemTvBoth:''},appComments:''},
     deliverables3:{questionPaper:'',questionPaperDate:'',progressCard:'',progressCardDate:''},
     services:{t1:'',atu1:'',atu1Date:'',atu1Comments:'',sim1:'',sim1Date:'',sim1Comments:'',t2:'',atu2:'',atu2Date:'',atu2Comments:'',sim2:'',sim2Date:'',sim2Comments:'',t3:'',sim3:'',sim3Date:'',sim3Comments:''},
     currentStatus:'', comments:''
@@ -824,6 +846,7 @@ function importSchoolHistoryTemplate(cells, current) {
 
   // Basic details: support both combined cells (LOCATION: MADAMBAKKAM) and
   // split cells (LOCATION: | Madambakkam). Do not depend on row/column position.
+  const basicLabels = new Set(['LOCATION','VINTAGE','BOOKS','CATEGORY']);
   for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){
     let found='';
     for(const xs of rows.values()){
@@ -833,7 +856,12 @@ function importSchoolHistoryTemplate(cells, current) {
         if(m && m[1].trim()){ found=m[1].trim(); break; }
         if(new RegExp(`^${label}\\s*[:：]?$`, 'i').test(v)){
           const next=xs.find(x=>x.col>xs[i].col && normExcel(x.value));
-          if(next) { found=normExcel(next.value).replace(/^[:：]\\s*/,''); break; }
+          if(next){
+            const nv=normExcel(next.value);
+            const nextLabel=nv.match(/^([A-Z][A-Z ]*)\\s*[:：]/i)?.[1]?.trim().toUpperCase();
+            if(!nextLabel || !basicLabels.has(nextLabel)) found=nv.replace(/^[:：]\\s*/,'');
+          }
+          if(found) break;
         }
       }
       if(found) break;
@@ -848,11 +876,19 @@ function importSchoolHistoryTemplate(cells, current) {
   }
 
   // Books & Payment — explicit row identity and explicit source columns.
+  for(const [label,key] of [['Pre-KG','prekg'],['G1','g1']]){const r=rowWith(label);if(r)put(`booksPayment.${key}`,cell(r,2));}
   for(const [label,key] of [['LKG','lkg'],['UKG','ukg']]){const r=rowWith(label);if(r){put(`booksPayment.${key}`,cell(r,2));put(`booksPayment.${key}AdditionalOrders`,cell(r,3));put(`booksPayment.${key}Returns`,cell(r,4));}}
   put('booksPayment.lkgHhp',cell(rowWith('LKG - HHP'),2)); put('booksPayment.ukgHhp',cell(rowWith('UKG - HHP'),2));
-  const del=rowWith('DELIVERY DATE');if(del){put('booksPayment.deliveryDate',cell(del,2),true);put('booksPayment.pyCredit',cell(del,5));}
-  put('booksPayment.discount',cell(rowWith('DISCOUNT'),2));
-  const inv=rowWith('SP INVOICE VALUE (MO)');if(inv){put('booksPayment.spInvoiceValueMo',cell(inv,2));put('booksPayment.total2526',cell(inv,6));}
+  const del=rowWith('DELIVERY DATE');if(del){put('booksPayment.deliveryDate',cell(del,2),true);put('booksPayment.deliveryDateAdditional',cell(del,3),true);put('booksPayment.pyCredit',cell(del,5));}
+  const discountRow=rowWith('DISCOUNT');
+  const lkgUkgDiscountRow=rowWith('LKG & UKG DISCOUNT');
+  if(discountRow) put('booksPayment.discount',cell(discountRow,2));
+  else if(lkgUkgDiscountRow) put('booksPayment.discount',cell(lkgUkgDiscountRow,2));
+  const g1DiscountRow=rowWith('DISCOUNT G1');
+  if(g1DiscountRow) put('booksPayment.discountG1',cell(g1DiscountRow,2));
+  const invLabelRows=['SP INVOICE VALUE (MO)','SP INVOICE VALUE (25-26)','SP INVOICE VALUE (26-27)'];
+  const inv=invLabelRows.map(rowWith).find(Boolean);
+  if(inv){put('booksPayment.spInvoiceValueMo',cell(inv,2));put('booksPayment.total2526',cell(inv,6));}
   const ao=rowWith('SP INVOICE VALUE (AO)');if(ao)put('booksPayment.spInvoiceValueAdditionalOrders',cell(ao,4));
   const rec=rowWith('AMOUNT RECEIVED');if(rec){put('booksPayment.amountReceived',cell(rec,2));put('booksPayment.amountReceivedDate',cell(rec,4),true);}
   const pend=rowWith('AMOUNT PENDING');if(pend){put('booksPayment.amountPending',cell(pend,2));put('booksPayment.status',cell(pend,4));}
@@ -863,17 +899,50 @@ function importSchoolHistoryTemplate(cells, current) {
   // Deliverables 1 — exact rows and B=Count, C=Date.
   for(const [label,key] of [['Teachers Copy','teachersCopy'],['Teachers Manual','teachersManual1'],['Teachers Manual 1','teachersManual1'],['Teachers Manual 2','teachersManual2'],['Flash Card','flashCards'],['Flash Cards','flashCards']]){const r=rowWith(label);if(r){put(`deliverables1.${key}`,cell(r,2));put(`deliverables1.${key}Date`,cell(r,3),true);}}
 
-  // Deliverables 2 — exact rows. Windows App Comments has its own row.
+  // Deliverables 2 — header-driven because different school files place DATE
+  // and the class columns in different positions. Never assume B/C/D/E.
   const wa=rowWith('WhatsApp');if(wa){put('deliverables2.whatsapp',cell(wa,2));put('deliverables2.whatsappDate',cell(wa,3),true);}
-  const win=rowWith('Windows App');if(win){put('deliverables2.windowsApp.appVersion',cell(win,2));put('deliverables2.windowsApp.date',cell(win,3),true);put('deliverables2.windowsApp.lkg',cell(win,4));put('deliverables2.windowsApp.ukg',cell(win,5));put('deliverables2.windowsApp.systemTvBoth',cell(win,6));}
-  const kids=rowWith('Kids App');if(kids){put('deliverables2.kidsApp.appVersion',cell(kids,2));put('deliverables2.kidsApp.date',cell(kids,3),true);put('deliverables2.kidsApp.systemTvBoth',cell(kids,4));}
+  const appData=(row,label)=>{
+    if(!row)return {};
+    let header=null;
+    for(let rr=row-1;rr>=Math.max(1,row-3);rr--){
+      const xs=rows.get(rr)||[];
+      const labels=xs.map(x=>clean(x.value));
+      if(labels.includes('date') && (labels.includes('lkg')||labels.includes('ukg')||labels.includes('system / tv / both')||labels.includes('system/tv/both'))){header=xs;break;}
+    }
+    const colBy=(tests,fallback)=>{const h=header?.find(x=>tests.some(t=>t.test(clean(x.value))));return h?.col ?? fallback;};
+    const dateCol=colBy([/^date$/],2);
+    const lkgCol=colBy([/^lkg$/],4);
+    const ukgCol=colBy([/^ukg$/],5);
+    const g1Col=colBy([/^g1$/],6);
+    const prekgCol=colBy([/^prekg$/],3);
+    const systemCol=colBy([/^system \/ tv \/ both$/,/^system\s*\/\s*tv\s*\/\s*both$/,/^system$/],7);
+    return {date:cell(row,dateCol),lkg:cell(row,lkgCol),ukg:cell(row,ukgCol),g1:cell(row,g1Col),prekg:cell(row,prekgCol),system:cell(row,systemCol),legacyVersion:header?cell(row,2):cell(row,2)};
+  };
+  const win=rowWith('Windows App');
+  if(win){const d=appData(win,'Windows App');put('deliverables2.windowsApp.date',d.date,true);put('deliverables2.windowsApp.prekg',d.prekg);put('deliverables2.windowsApp.lkg',d.lkg);put('deliverables2.windowsApp.ukg',d.ukg);put('deliverables2.windowsApp.g1',d.g1);put('deliverables2.windowsApp.systemTvBoth',d.system);if(!d.date && d.legacyVersion)put('deliverables2.windowsApp.appVersion',d.legacyVersion);}
+  const kids=rowWith('Kids App');
+  if(kids){const d=appData(kids,'Kids App');put('deliverables2.kidsApp.date',d.date,true);put('deliverables2.kidsApp.prekg',d.prekg);put('deliverables2.kidsApp.lkg',d.lkg);put('deliverables2.kidsApp.ukg',d.ukg);put('deliverables2.kidsApp.g1',d.g1);put('deliverables2.kidsApp.systemTvBoth',d.system);if(!d.date && d.legacyVersion)put('deliverables2.kidsApp.appVersion',d.legacyVersion);}
   const wc=rowWith('Windows App Comments');if(wc)put('deliverables2.appComments',cell(wc,2));
 
   for(const [label,key] of [['Question Paper','questionPaper'],['Progress Card','progressCard']]){const r=rowWith(label);if(r){put(`deliverables3.${key}`,cell(r,2));put(`deliverables3.${key}Date`,cell(r,3),true);}}
 
   // Services — retain name/value, date and every dedicated comment row.
-  for(const [label,key] of [['T1','t1'],['ATU 1','atu1'],['SIM 1','sim1'],['T2','t2'],['ATU 2','atu2'],['SIM 2','sim2'],['T3','t3'],['SIM 3','sim3']]){const r=rowWith(label);if(r){put(`services.${key}`,cell(r,2));if(/^(atu1|sim1|atu2|sim2|sim3)$/.test(key))put(`services.${key}Date`,cell(r,3),true);}}
-  for(const [label,key] of [['ATU 1 COMMENTS','atu1Comments'],['SIM 1 COMMENTS','sim1Comments'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2 COMMENTS','sim2Comments'],['SIM 3 COMMENTS','sim3Comments']]){const r=rowWith(label);if(r)put(`services.${key}`,cell(r,2));}
+  for(const [label,key] of [['T1','t1'],['ATU 1','atu1'],['SIM 1','sim1'],['T2','t2'],['General Visit','generalVisit'],['ATU 2','atu2'],['SIM 2','sim2'],['T3','t3'],['SIM 3','sim3']]){const r=rowWith(label);if(r){put(`services.${key}`,cell(r,2));if(/^(atu1|sim1|atu2|sim2|sim3)$/.test(key))put(`services.${key}Date`,cell(r,3),true);}}
+  const serviceRows=[];
+  for(const [r,xs] of rows){
+    const label=clean(xs[0]?.value || '');
+    const map={'t1':'t1','atu 1':'atu1','sim 1':'sim1','t2':'t2','general visit':'generalVisit','atu 2':'atu2','sim 2':'sim2','t3':'t3','sim 3':'sim3'};
+    if(map[label]) serviceRows.push({row:r,key:map[label]});
+  }
+  for(const [label,defaultKey] of [['ATU 1 COMMENTS','atu1Comments'],['SIM 1 COMMENTS','sim1Comments'],['ATU 2 COMMENTS','atu2Comments'],['SIM 2 COMMENTS','sim2Comments'],['SIM 3 COMMENTS','sim3Comments']]){
+    for(const [r,xs] of rows){
+      if(!xs.some(x=>clean(x.value)===clean(label))) continue;
+      const prior=serviceRows.filter(x=>x.row<r).at(-1);
+      const key=(prior && (prior.key.startsWith('atu') || prior.key.startsWith('sim'))) ? `${prior.key}Comments` : defaultKey;
+      put(`services.${key}`,cell(r,2));
+    }
+  }
   put('currentStatus',cell(rowWith('CURRENT STATUS'),2));
   // The final COMMENTS row is after CURRENT STATUS. Using the last matching row avoids
   // accidentally reading the blank Books & Payment comments row.
@@ -892,7 +961,7 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
   return <div style={{position:'relative',marginBottom:isPhone?24:40,padding:isPhone?12:18,border:`1px solid ${T.line}`,borderRadius:12,background:T.sub,overflow:'hidden'}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}><div><div className="mono" style={{fontSize:11,textTransform:'uppercase',letterSpacing:'.12em',color:T.faint}}>School History</div><M style={{fontSize:12,color:T.mute,display:'block',marginTop:5}}>2026–2027 · {filled} details recorded</M></div>{!readOnly && <button className="press" title="Edit school history" aria-label="Edit school history" onClick={()=>{setDraft(initial);setProblem(null);setEditing(true)}} style={{width:36,height:36,borderRadius:9,border:`1px solid ${T.line}`,background:T.bg,color:T.text,cursor:'pointer',fontSize:17}}>✎</button>}</div>
     {!filled ? <M style={{fontSize:13,color:T.mute}}>{readOnly ? 'No history details entered yet.' : 'No history details entered yet. Use the corner edit button to add the school record.'}</M> : historySections.map(([title,fields])=>{
-      const vals=fields.map(([path,label])=>[path,label,String(getPath(initial,path)).trim()]).filter(([, ,v])=>v);
+      const vals=fields.map(([path,label])=>[path,label,historyDisplayValue(path,getPath(initial,path))]).filter(([, ,v])=>v);
       if(!vals.length)return null;
       return <div key={title} style={{borderTop:`1px solid ${T.line}`,paddingTop:12,marginTop:12}}>
         <div style={{fontSize:12,fontWeight:600,marginBottom:8}}>{title}</div>
