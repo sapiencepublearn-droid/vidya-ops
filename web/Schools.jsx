@@ -604,6 +604,35 @@ const historySections = [
 ];
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
 function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
+function formatHistoryValue(path, value) {
+  const raw=String(value ?? '').trim();
+  if(!raw) return '';
+  if(path === 'booksPayment.discount' && /^[-+]?\d*\.?\d+$/.test(raw)){
+    const n=Number(raw);
+    if(Number.isFinite(n) && n >= 0 && n <= 1) return `${(n * 100).toFixed(2).replace(/\.?0+$/,'')}%`;
+  }
+  return raw;
+}
+function sanitizeSchoolHistory(history) {
+  const h=history || {};
+  const out={...h, contacts:{...(h.contacts||{})}, booksPayment:{...(h.booksPayment||{})}};
+  for(const key of ['location','vintage','books','category']) {
+    const raw=String(out[key] ?? '').trim();
+    if(!raw) continue;
+    const m=raw.match(/^([A-Z][A-Z ]*)\s*[:：]\s*(.*)$/i);
+    if(m && ['LOCATION','VINTAGE','BOOKS','CATEGORY'].includes(m[1].trim().toUpperCase())) {
+      const label=m[1].trim().toUpperCase();
+      const value=m[2].trim();
+      if(label===key.toUpperCase()) out[key]=value;
+      else if(key==='vintage' || key==='books') out[key]='';
+    }
+  }
+  // Repair the specific legacy corruption produced by the old importer: blank
+  // VINTAGE/BOOKS followed by CATEGORY: X used to copy the category into them.
+  if(/^CATEGORY\s*[:：]/i.test(String(out.vintage||''))) out.vintage='';
+  if(/^CATEGORY\s*[:：]/i.test(String(out.books||''))) out.books='';
+  return out;
+}
 
 function readU16(view, offset) { return view.getUint16(offset, true); }
 function readU32(view, offset) { return view.getUint32(offset, true); }
@@ -824,7 +853,11 @@ function importSchoolHistoryTemplate(cells, current) {
         if(m && m[1].trim()){ found=m[1].trim(); break; }
         if(new RegExp(`^${label}\\s*[:：]?$`, 'i').test(v)){
           const next=xs.find(x=>x.col>xs[i].col && normExcel(x.value));
-          if(next) { found=normExcel(next.value).replace(/^[:：]\\s*/,''); break; }
+          if(next) {
+            const nextValue=normExcel(next.value);
+            const looksLikeLabel=/^(LOCATION|VINTAGE|BOOKS|CATEGORY)\s*[:：]?/i.test(nextValue);
+            if(!looksLikeLabel) { found=nextValue.replace(/^[:：]\s*/,''); break; }
+          }
         }
       }
       if(found) break;
@@ -873,9 +906,9 @@ function importSchoolHistoryTemplate(cells, current) {
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone, readOnly = false }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [commentPopup,setCommentPopup]=useState(null);
-  const initial=school.school_history || {};
+  const initial=sanitizeSchoolHistory(school.school_history || {});
   const [draft,setDraft]=useState(initial);
-  useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
+  useEffect(()=>{ if(!editing) setDraft(sanitizeSchoolHistory(school.school_history || {})); },[school.school_history,editing]);
   const save=async()=>{setBusy(true);setProblem(null);try{const out=await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);onSaved?.(out?.school_history || draft);}catch(e){setProblem(e);}finally{setBusy(false);}};
   const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const imported=importSchoolHistoryTemplate(cells,draft);const excelSchool=imported.schoolName;if(excelSchool && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(imported.out);}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
@@ -913,7 +946,8 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
             </div>;
           })}
         </div> : <div style={{display:'grid',gap:2}}>
-          {vals.map(([path,label,value])=>{
+          {vals.map(([path,label,rawValue])=>{
+            const value=formatHistoryValue(path,rawValue);
             const numeric=/^[+\-₹$€£]?\s*\d[\d,./%+\- ]*$/.test(value);
             const isComment=/comments|remarks|appComments/i.test(label);
             return <div key={path} style={{display:'grid',gridTemplateColumns:isPhone?'48% 52%':'190px 1fr',gap:isPhone?8:12,alignItems:'start',padding:'6px 0',fontSize:isPhone?12:12,minWidth:0}}>
