@@ -23,7 +23,7 @@ export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock,
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(null);
   const [mapOpen, setMapOpen] = useState(false);
-  const schools = useResource(() => api.schools('?active=true'), []);
+  const schools = useResource(() => api.schools('?active=true&limit=500'), []);
   const list = schools.data || [];
 
   const filtered = list.filter((s) => {
@@ -140,6 +140,108 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
   );
 }
 
+
+function schoolImportValue(v) {
+  return normExcel(v).replace(/^[-—]+$/, '').trim();
+}
+
+function schoolImportRecord(parsed) {
+  const h = parsed.out || {};
+  const c = h.contacts || {};
+  const name = schoolImportValue(parsed.schoolName);
+  const zone = schoolImportValue(h.location);
+  const principal = schoolImportValue(c.principal);
+  const principalPhone = schoolImportValue(c.principalPhone);
+  const correspondent = schoolImportValue(c.correspondent);
+  const correspondentPhone = schoolImportValue(c.correspondentPhone);
+  const contactPerson = principal || correspondent;
+  const contactPhone = principalPhone || correspondentPhone;
+  return {
+    name, zone, contactPerson,
+    contactDesignation: principal ? 'Principal' : correspondent ? 'Correspondent' : '',
+    contactPhone, history: h,
+  };
+}
+
+const normalizeSchoolName = (v) => normExcel(v)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .replace(/\b(school|matriculation|matric|higher|secondary)\b/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+function BulkSchoolImport({ T, api, isPhone, Btn, onDone, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState(null);
+  const [report, setReport] = useState(null);
+  const run = async (files) => {
+    if (!files?.length) return;
+    setBusy(true); setProblem(null); setReport(null);
+    const results = { created: [], updated: [], failed: [] };
+    try {
+      const existing = await api.schools('?limit=500');
+      const byName = new Map((existing || []).map(s => [normalizeSchoolName(s.name), s]));
+      for (const file of Array.from(files)) {
+        try {
+          const parsed = await readXlsxFiles(file);
+          const item = schoolImportRecord(parsed);
+          if (!item.name || !item.zone) throw new Error('School name or location is missing.');
+          const key = normalizeSchoolName(item.name);
+          const current = byName.get(key);
+          if (current) {
+            const updated = await api.admin.updateSchool(current.location_id, {
+              name: item.name,
+              zone: item.zone,
+              ...(item.contactPerson ? { contactPerson: item.contactPerson } : {}),
+              ...(item.contactDesignation ? { contactDesignation: item.contactDesignation } : {}),
+              ...(item.contactPhone ? { contactPhone: item.contactPhone } : {}),
+            }, newActionKey());
+            await api.admin.updateSchoolHistory(current.location_id, item.history, newActionKey());
+            byName.set(key, { ...current, ...updated });
+            results.updated.push(item.name);
+          } else {
+            const created = await api.admin.createSchool({
+              name: item.name, zone: item.zone,
+              ...(item.contactPerson ? { contactPerson: item.contactPerson } : {}),
+              ...(item.contactDesignation ? { contactDesignation: item.contactDesignation } : {}),
+              ...(item.contactPhone ? { contactPhone: item.contactPhone } : {}),
+              latitude: null, longitude: null, radiusMetres: 100, isActive: true,
+            }, newActionKey());
+            await api.admin.updateSchoolHistory(created.location_id, item.history, newActionKey());
+            byName.set(key, created);
+            results.created.push(item.name);
+          }
+        } catch (e) {
+          results.failed.push({ file: file.name, message: e?.message || 'Import failed' });
+        }
+      }
+      setReport(results);
+      onDone?.();
+    } catch (e) { setProblem(e); }
+    finally { setBusy(false); }
+  };
+  return <div style={{position:'fixed',inset:0,background:T.overlay,zIndex:70,display:'flex',alignItems:isPhone?'flex-end':'center',justifyContent:'center',padding:isPhone?0:16}}>
+    <div className="rise" style={{width:'100%',maxWidth:560,maxHeight:'90vh',overflowY:'auto',background:T.bg,padding:28}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:16,marginBottom:8}}>
+        <div><h2 className="tight" style={{fontSize:20,margin:0}}>Import School History</h2><div style={{fontSize:12,color:T.mute,marginTop:5}}>Upload one or many Excel files to create or update the School Master.</div></div>
+        <button className="press" onClick={onClose} style={{background:'none',border:0,color:T.faint,fontSize:18,cursor:'pointer'}}>×</button>
+      </div>
+      <div style={{padding:'14px 0 18px',fontSize:12,color:T.mute,lineHeight:1.6}}>The importer saves the school name, location, contact details and the complete 2026–2027 history. It never overwrites confirmed coordinates, radius or Active/Inactive status.</div>
+      <label className="press" style={{display:'inline-flex',alignItems:'center',gap:8,padding:'11px 14px',borderRadius:9,border:`1px solid ${T.line}`,cursor:busy?'wait':'pointer',fontSize:13,color:T.text}}>
+        {busy ? 'Importing…' : 'Choose Excel files'}
+        <input type="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={e=>run(e.target.files)} style={{display:'none'}} />
+      </label>
+      {problem && <div style={{marginTop:16,color:T.accent,fontSize:13}}>{problem.message}</div>}
+      {report && <div style={{marginTop:22,borderTop:`1px solid ${T.line}`,paddingTop:18}}>
+        <div style={{fontSize:14,fontWeight:600,marginBottom:12}}>Import complete</div>
+        <div style={{fontSize:13,lineHeight:1.8}}>Created: <strong>{report.created.length}</strong> · Updated: <strong>{report.updated.length}</strong> · Failed: <strong>{report.failed.length}</strong></div>
+        {report.failed.length > 0 && <div style={{marginTop:14,fontSize:12,color:T.accent}}>{report.failed.map(x=><div key={x.file}>{x.file}: {x.message}</div>)}</div>}
+        <div style={{marginTop:18}}><Btn onClick={onClose}>Done</Btn></div>
+      </div>}
+    </div>
+  </div>;
+}
+
 export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Rows, Blank, M }) {
   const [q, setQ] = useState('');
   const [zone, setZone] = useState('All');
@@ -147,8 +249,9 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
   const [editing, setEditing] = useState(null);   // school object, or 'new'
   const [open, setOpen] = useState(null);         // school id for detail
   const [mapOpen, setMapOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
 
-  const schools = useResource(() => api.schools(), []);
+  const schools = useResource(() => api.schools('?limit=500'), []);
   const list = schools.data || [];
 
   const zones = useMemo(
@@ -184,6 +287,7 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>Schools</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn variant="line" onClick={() => setMapOpen(true)}>School Map</Btn>
+          <Btn variant="line" onClick={() => setBulkImportOpen(true)}>Import Excel</Btn>
           <Btn onClick={() => setEditing('new')}>Add school</Btn>
         </div>
       </div>
@@ -251,6 +355,9 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
         <SchoolMap T={T} schools={list} isPhone={isPhone}
           onViewDetails={(id) => setOpen(id)} onClose={() => setMapOpen(false)} />
       )}
+
+      {bulkImportOpen && <BulkSchoolImport T={T} api={api} isPhone={isPhone} Btn={Btn}
+        onDone={() => schools.reload()} onClose={() => setBulkImportOpen(false)} />}
 
       {editing && (
         <SchoolForm T={T} api={api} isPhone={isPhone}
