@@ -549,7 +549,7 @@ router.get('/admin/attendance', adminOnly, wrap(async (req, res) => {
 // it. Zod refuses .partial() on a schema carrying refinements.
 const schoolFields = z.object({
   name: z.string().trim().min(1).max(120),
-  zone: z.string().trim().min(1).max(80),
+  zone: z.string().trim().max(80).nullable().optional(),
   address: z.string().trim().max(400).optional(),
   contactPerson: z.string().trim().max(120).optional(),
   contactDesignation: z.string().trim().max(120).optional(),
@@ -778,7 +778,7 @@ router.post('/admin/schools', adminOnly, idempotent(wrap(async (req, res) => {
         `INSERT INTO locations (kind, name, zone, address, contact_person, contact_designation,
             contact_phone, latitude, longitude, radius_metres, is_active, location_set_by, location_set_at)
          VALUES ('school',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-        [f.name, f.zone, f.address ?? null, f.contactPerson ?? null, f.contactDesignation ?? null,
+        [f.name, f.zone ?? null, f.address ?? null, f.contactPerson ?? null, f.contactDesignation ?? null,
          f.contactPhone ?? null, f.latitude ?? null, f.longitude ?? null, f.radiusMetres, f.isActive,
          hasCoords ? req.user.id : null, hasCoords ? new Date() : null])).rows[0];
     } catch (e) {
@@ -809,7 +809,7 @@ router.patch('/admin/schools/:id', uuidParam('id'), adminOnly, idempotent(wrap(a
               location_set_at = COALESCE($13, location_set_at)
         WHERE location_id=$1 RETURNING *`,
       [req.params.id,
-       f.name ?? cur.name, f.zone ?? cur.zone,
+       f.name ?? cur.name, f.zone === undefined ? cur.zone : f.zone,
        f.address === undefined ? cur.address : f.address,
        f.contactPerson === undefined ? cur.contact_person : f.contactPerson,
        f.contactDesignation === undefined ? cur.contact_designation : f.contactDesignation,

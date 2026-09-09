@@ -175,7 +175,8 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
         const imported = importSchoolHistoryTemplate(candidate.ws.cells, {});
         const history = imported.out;
         const name = candidate.name;
-        const zone = candidate.location;
+        const address = candidate.location;
+        const zone = null;
         const contact = history.contacts?.principal || history.contacts?.correspondent || '';
         const phone = history.contacts?.principalPhone || history.contacts?.correspondentPhone || '';
         const existing = schoolsByKey.get(key);
@@ -184,16 +185,18 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
           school = await api.admin.updateSchool(existing.location_id, {
             name,
             zone,
+            ...(address ? { address } : {}),
             ...(contact ? { contactPerson: contact } : {}),
             ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
             ...(phone ? { contactPhone: phone } : {}),
           }, newActionKey());
           await api.admin.updateSchoolHistory(existing.location_id, history, newActionKey());
           schoolsByKey.set(key, { ...existing, ...school });
-          results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: zone });
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: address });
         } else {
           school = await api.admin.createSchool({
             name, zone,
+            ...(address ? { address } : {}),
             ...(contact ? { contactPerson: contact } : {}),
             ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
             ...(phone ? { contactPhone: phone } : {}),
@@ -202,7 +205,7 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
           }, newActionKey());
           await api.admin.updateSchoolHistory(school.location_id, history, newActionKey());
           schoolsByKey.set(key, school);
-          results.push({ file: file.name, sheet: candidate.ws.name, status: 'created', name, location: zone });
+          results.push({ file: file.name, sheet: candidate.ws.name, status: 'created', name, location: address });
         }
       } catch (e) {
         results.push({ file: file.name, sheet: candidate.ws.name, status: 'error', name: candidate.name, message: e.message || 'Import failed.' });
@@ -371,6 +374,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   const [problem, setProblem] = useState(null);
   const [confirming, setConfirming] = useState(null);
   const [historyEditing, setHistoryEditing] = useState(false);
+  const [statusBusy, setStatusBusy] = useState(false);
 
   const assign = async (employeeId, remove) => {
     setBusy(employeeId); setProblem(null);
@@ -404,12 +408,23 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   return (
     <>
       {back}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 8 }}>
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{s.name}</h1>
-        <Btn variant="line" onClick={() => onEdit(s)}>Edit</Btn>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Btn variant="line" onClick={() => onEdit(s)}>Edit</Btn>
+          <Btn variant="line" busy={statusBusy} onClick={async () => {
+            const nextActive = !s.is_active;
+            const action = nextActive ? 'reactivate' : 'deactivate';
+            if (!window.confirm(`${nextActive ? 'Reactivate' : 'Deactivate'} ${s.name}?${nextActive ? '' : ' Past visit and attendance history will be kept.'}`)) return;
+            setStatusBusy(true); setProblem(null);
+            try { await api.admin.updateSchool(id, { isActive: nextActive }, newActionKey()); await detail.reload(); }
+            catch (e) { setProblem(e); }
+            finally { setStatusBusy(false); }
+          }}>{s.is_active ? 'Deactivate' : 'Reactivate'}</Btn>
+        </div>
       </div>
       <M style={{ fontSize: 12, color: T.mute, display: 'block', marginBottom: 32 }}>
-        {s.zone}{s.is_active ? '' : ' · inactive'}
+        {s.zone ? `${s.zone} · ` : ''}{s.is_active ? 'active' : 'inactive'}
       </M>
 
       <div style={{
@@ -467,7 +482,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
       <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
-        Only these people can punch in here. Everyone else is refused, even standing at the gate.
+        Assignments are kept for planning and reporting. Technical Support can visit any active school; Trainers follow their assigned-school rules.
       </div>
 
       {problem && (
@@ -593,7 +608,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 
 
 const historySections = [
-  ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
   ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
   ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual — Count'], ['deliverables1.teachersManual1Date','Teachers Manual — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Card — Count'], ['deliverables1.flashCardsDate','Flash Card — Date']]],
@@ -862,7 +877,7 @@ function importSchoolHistoryTemplate(cells, current) {
       }
       if(found) break;
     }
-    if(found) put(key,found);
+    if(found && key !== 'location') put(key,found);
   }
   const schoolName=extractSchoolIdentity(cells).name || '';
 
@@ -1073,12 +1088,12 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
   const latOk = blank || (Number.isFinite(lat) && lat >= -90 && lat <= 90 && String(f.latitude).trim() !== '');
   const lngOk = blank || (Number.isFinite(lng) && lng >= -180 && lng <= 180 && String(f.longitude).trim() !== '');
   const radiusOk = Number.isInteger(radius) && radius >= 20 && radius <= 2000;
-  const incomplete = !f.name.trim() || !f.zone.trim() || !latOk || !lngOk || !radiusOk;
+  const incomplete = !f.name.trim() || !latOk || !lngOk || !radiusOk;
 
   const submit = async () => {
     setBusy(true); setProblem(null);
     const body = {
-      name: f.name.trim(), zone: f.zone.trim(),
+      name: f.name.trim(), zone: f.zone.trim() ? f.zone.trim() : null,
       ...(f.address.trim() ? { address: f.address.trim() } : {}),
       ...(f.contactPerson.trim() ? { contactPerson: f.contactPerson.trim() } : {}),
       ...(f.contactDesignation.trim() ? { contactDesignation: f.contactDesignation.trim() } : {}),
@@ -1130,9 +1145,9 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
 
         <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 20 }}>
           <div>
-            <div className="mono" style={label}>Zone</div>
+            <div className="mono" style={label}>Zone <span style={{ textTransform: 'none', letterSpacing: 0, color: T.mute }}>(optional)</span></div>
             <input value={f.zone} onChange={(e) => set({ zone: e.target.value })}
-              placeholder="Thiruporur" style={field} />
+              placeholder="Leave blank; enter later" style={field} />
           </div>
           <div>
             <div className="mono" style={label}>Radius (metres)</div>

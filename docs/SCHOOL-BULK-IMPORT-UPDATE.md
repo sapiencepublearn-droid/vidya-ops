@@ -14,3 +14,8 @@ without changing its active/inactive state or coordinates, then replaces only th
 School History JSON. For a new school it creates an active School Master record with no guessed
 coordinates and stores the imported history. Coordinates must be confirmed separately before
 school GPS check-in can be used.
+
+
+## Address and Zone
+
+Excel `LOCATION` is imported into the School Master `address`. The School Master `zone` is intentionally left blank so Admin can enter the operational zone manually later. Existing school addresses are preserved when already present.
