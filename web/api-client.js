@@ -228,6 +228,7 @@ export function createClient({ baseUrl = '/api', onUnauthenticated } = {}) {
       attendance: (date) => request(`/admin/attendance${date ? `?date=${date}` : ''}`),
       createSchool: (body, key) => request('/admin/schools', { method: 'POST', body, idempotencyKey: key }),
       updateSchool: (id, body, key) => request(`/admin/schools/${id}`, { method: 'PATCH', body, idempotencyKey: key }),
+      deleteSchool: (id, key) => request(`/admin/schools/${id}`, { method: 'DELETE', idempotencyKey: key }),
       updateSchoolHistory: (id, body, key) => request(`/admin/schools/${id}/history`, { method: 'PUT', body, idempotencyKey: key }),
       resolveGoogleMaps: (url) => request('/admin/schools/resolve-google-maps', { method: 'POST', body: { url } }),
       setSchoolLocationFromIncident: (id, body, key) =>

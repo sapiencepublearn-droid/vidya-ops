@@ -504,15 +504,6 @@ const historySections = [
 ];
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
 function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
-function formatHistoryValue(path, value) {
-  const raw=String(value ?? '').trim();
-  if(!raw) return '';
-  if(path === 'booksPayment.discount' && /^[-+]?\d*\.?\d+$/.test(raw)){
-    const n=Number(raw);
-    if(Number.isFinite(n) && n >= 0 && n <= 1) return `${(n * 100).toFixed(2).replace(/\.?0+$/,'')}%`;
-  }
-  return raw;
-}
 
 function readU16(view, offset) { return view.getUint16(offset, true); }
 function readU32(view, offset) { return view.getUint32(offset, true); }
@@ -642,14 +633,10 @@ function importSchoolHistoryTemplate(cells, current) {
   const put=(path,value,date=false)=>{let v=normExcel(value);if(date)v=excelDateText(v);if(!v||v==='-'||v==='—')return;const ks=path.split('.');let o=out;for(const k of ks.slice(0,-1))o=o[k];o[ks.at(-1)]=v;};
   const inline=(v,label)=>normExcel(v).replace(new RegExp(`^${label.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&')}\\s*[:：]\\s*`,'i'),'').trim();
 
-  // Basic details: support combined LABEL: VALUE cells and split LABEL | VALUE cells.
+  // Basic details: row 3 contains independent LABEL: VALUE cells.
   for(const [label,key] of [['LOCATION','location'],['VINTAGE','vintage'],['BOOKS','books'],['CATEGORY','category']]){
-    const row=rows.get(3)||[];
-    const x=row.find(c=>new RegExp(`^${label}\\s*[:：]\\s*(.+)$`, 'i').test(c.value));
-    if(x){ put(key,inline(x.value,label)); continue; }
-    const labelCell=row.find(c=>new RegExp(`^${label}\\s*[:：]?$`, 'i').test(c.value));
-    const next=labelCell && row.find(c=>c.col>labelCell.col && normExcel(c.value));
-    if(next && !/^(LOCATION|VINTAGE|BOOKS|CATEGORY)\s*[:：]?/i.test(next.value)) put(key,normExcel(next.value).replace(/^[:：]\s*/,''));
+    const x=(rows.get(3)||[]).find(c=>new RegExp(`^${label}\\s*[:：]\\s*`, 'i').test(c.value));
+    if(x)put(key,inline(x.value,label));
   }
   const schoolName=(rows.get(2)||[]).map(x=>x.value).find(Boolean)||'';
 
@@ -733,8 +720,7 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
             </div>;
           })}
         </div> : <div style={{display:'grid',gap:2}}>
-          {vals.map(([path,label,rawValue])=>{
-            const value=formatHistoryValue(path,rawValue);
+          {vals.map(([path,label,value])=>{
             const numeric=/^[+\-₹$€£]?\s*\d[\d,./%+\- ]*$/.test(value);
             const isComment=/comments|remarks|appComments/i.test(label);
             return <div key={path} style={{display:'grid',gridTemplateColumns:isPhone?'48% 52%':'190px 1fr',gap:isPhone?8:12,alignItems:'start',padding:'6px 0',fontSize:isPhone?12:12,minWidth:0}}>

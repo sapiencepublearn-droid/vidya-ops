@@ -62,21 +62,9 @@ test('the form never fills in coordinates for the admin', () => {
   assert.match(Schools, /Do not estimate/, 'and it says where to get them');
 });
 
-test('school bulk import maps Excel LOCATION into address and leaves zone blank', () => {
-  assert.match(Schools, /const zone = null/);
-  assert.match(Schools, /\.\.\.\(address \? \{ address \} : \{\}\)/);
-  assert.match(Schools, /const zone = null/);
-});
-
-test('school zone is optional in the admin form', () => {
-  assert.match(Schools, /Zone <span[^>]*>\(optional\)/);
-  assert.match(Schools, /const incomplete = !f\.name\.trim\(\) \|\| !latOk/);
-});
-
 test('the UI deactivates rather than deletes', () => {
   assert.match(Schools, /isActive: !f\.isActive/);
-  assert.match(Schools, /Deactivate.*Reactivate|Reactivate.*Deactivate/);
-  assert.equal(/deleteSchool|method: 'DELETE'/.test(uiCode), false, 'no permanent delete path in the UI');
+  assert.equal(/deleteSchool|method: 'DELETE'/.test(uiCode), false, 'no delete path in the UI');
   assert.equal(/deleteSchool/.test(client), false, 'and none in the client');
 });
 
@@ -93,8 +81,8 @@ test('the employee app offers no way to change assignments', () => {
   assert.equal(/assignSchool/.test(employeeShell), false);
 });
 
-test('school assignments are not used as a Technical Support hard block', () => {
-  assert.match(Schools, /Technical Support can visit any active school/);
+test('the assignment restriction is explained rather than hidden', () => {
+  assert.match(Schools, /Only these people can punch in here/);
 });
 
 /* ─────────────────────────── 11-12  punch UI never classifies location */

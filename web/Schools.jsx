@@ -72,7 +72,7 @@ export function EmployeeSchools({ T, api, isPhone, useResource, Btn, ErrorBlock,
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.name}</div>
                     <div style={{ fontSize: 12, color: T.mute, marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.zone}{s.address ? ` · ${s.address}` : ''}
+                      {s.zone ? `${s.zone}${s.address ? ` · ${s.address}` : ''}` : (s.address || 'Zone not set')}
                     </div>
                   </div>
                   <span style={{ color: T.faint, fontSize: 18 }}>›</span>
@@ -107,7 +107,7 @@ function EmployeeSchoolDetail({ T, api, id, onBack, isPhone, useResource, Btn, E
     <div>
       {back}
       <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: '0 0 6px' }}>{s.name}</h1>
-      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone}{s.is_active ? '' : ' · inactive'}</div>
+      <div style={{ fontSize: 13, color: T.mute, marginBottom: 26 }}>{s.zone ? s.zone : 'Zone not set'}{s.is_active ? '' : ' · inactive'}</div>
 
       <div style={{ borderTop: `1px solid ${T.line}` }}>
         {[
@@ -176,7 +176,6 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
         const history = imported.out;
         const name = candidate.name;
         const address = candidate.location;
-        const zone = null;
         const contact = history.contacts?.principal || history.contacts?.correspondent || '';
         const phone = history.contacts?.principalPhone || history.contacts?.correspondentPhone || '';
         const existing = schoolsByKey.get(key);
@@ -184,8 +183,8 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
         if (existing) {
           school = await api.admin.updateSchool(existing.location_id, {
             name,
-            zone,
-            ...(address ? { address } : {}),
+            zone: null,
+            address,
             ...(contact ? { contactPerson: contact } : {}),
             ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
             ...(phone ? { contactPhone: phone } : {}),
@@ -195,8 +194,7 @@ async function importSchoolWorkbooks(files, api, existingSchools) {
           results.push({ file: file.name, sheet: candidate.ws.name, status: 'updated', name, location: address });
         } else {
           school = await api.admin.createSchool({
-            name, zone,
-            ...(address ? { address } : {}),
+            name, zone: null, address,
             ...(contact ? { contactPerson: contact } : {}),
             ...(contact ? { contactDesignation: history.contacts?.principal ? 'Principal' : 'Correspondent' } : {}),
             ...(phone ? { contactPhone: phone } : {}),
@@ -330,7 +328,7 @@ export function AdminSchools({ T, api, isPhone, useResource, Btn, ErrorBlock, Ro
                             )}
                           </div>
                           <div style={{ fontSize: 12, color: T.mute, marginTop: 3 }}>
-                            {s.zone}{s.address ? ` · ${s.address}` : ''}
+                            {s.zone ? `${s.zone}${s.address ? ` · ${s.address}` : ''}` : (s.address || 'Zone not set')}
                           </div>
                         </div>
                         <M style={{
@@ -374,7 +372,6 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   const [problem, setProblem] = useState(null);
   const [confirming, setConfirming] = useState(null);
   const [historyEditing, setHistoryEditing] = useState(false);
-  const [statusBusy, setStatusBusy] = useState(false);
 
   const assign = async (employeeId, remove) => {
     setBusy(employeeId); setProblem(null);
@@ -408,23 +405,20 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
   return (
     <>
       {back}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginBottom: 8 }}>
         <h1 className="tight" style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>{s.name}</h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <Btn variant="line" onClick={() => onEdit(s)}>Edit</Btn>
-          <Btn variant="line" busy={statusBusy} onClick={async () => {
-            const nextActive = !s.is_active;
-            const action = nextActive ? 'reactivate' : 'deactivate';
-            if (!window.confirm(`${nextActive ? 'Reactivate' : 'Deactivate'} ${s.name}?${nextActive ? '' : ' Past visit and attendance history will be kept.'}`)) return;
-            setStatusBusy(true); setProblem(null);
-            try { await api.admin.updateSchool(id, { isActive: nextActive }, newActionKey()); await detail.reload(); }
-            catch (e) { setProblem(e); }
-            finally { setStatusBusy(false); }
-          }}>{s.is_active ? 'Deactivate' : 'Reactivate'}</Btn>
+          <Btn variant="line" onClick={async()=>{
+            const ok=window.confirm(`Delete ${s.name} permanently? This removes the imported School History too. If attendance, visits or assignments exist, deletion will be refused.`);
+            if(!ok)return;
+            try { await api.admin.deleteSchool(s.location_id, newActionKey()); onBack(); }
+            catch(e){ setProblem(e); }
+          }}>Delete</Btn>
         </div>
       </div>
       <M style={{ fontSize: 12, color: T.mute, display: 'block', marginBottom: 32 }}>
-        {s.zone ? `${s.zone} · ` : ''}{s.is_active ? 'active' : 'inactive'}
+        {s.zone ? s.zone : 'Zone not set'}{s.is_active ? '' : ' · inactive'}
       </M>
 
       <div style={{
@@ -482,7 +476,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
       {/* Assignment is an authorization control, so it is stated plainly. */}
       <div className="mono" style={{ ...label, marginBottom: 12 }}>Assigned employees</div>
       <div style={{ fontSize: 12, color: T.mute, marginBottom: 16, lineHeight: 1.6 }}>
-        Assignments are kept for planning and reporting. Technical Support can visit any active school; Trainers follow their assigned-school rules.
+        Assignments are used for planning. Technical Support can visit any active school; Trainers follow their assigned-school visit list.
       </div>
 
       {problem && (
@@ -608,7 +602,7 @@ function SchoolDetail({ T, api, id, onBack, onEdit, isPhone, useResource, Btn, E
 
 
 const historySections = [
-  ['Basic details', [['vintage','Vintage'], ['books','Books'], ['category','Category']]],
+  ['Basic details', [['location','Location'], ['vintage','Vintage'], ['books','Books'], ['category','Category']]],
   ['Contacts', [['contacts.correspondent','Correspondent'], ['contacts.correspondentPhone','Correspondent Phone'], ['contacts.principal','Principal'], ['contacts.principalPhone','Principal Phone'], ['contacts.keyPerson','Key Person'], ['contacts.keyPersonPhone','Key Person Phone']]],
   ['Books & Payment', [['booksPayment.lkg','LKG — Initial Count'], ['booksPayment.lkgAdditionalOrders','LKG — Additional Orders'], ['booksPayment.lkgReturns','LKG — Returns'], ['booksPayment.ukg','UKG — Initial Count'], ['booksPayment.ukgAdditionalOrders','UKG — Additional Orders'], ['booksPayment.ukgReturns','UKG — Returns'], ['booksPayment.lkgHhp','LKG — HHP'], ['booksPayment.ukgHhp','UKG — HHP'], ['booksPayment.deliveryDate','Delivery Date'], ['booksPayment.pyCredit','P.Y. Credit'], ['booksPayment.discount','Discount'], ['booksPayment.spInvoiceValueMo','SP Invoice Value (MO)'], ['booksPayment.spInvoiceValueAdditionalOrders','SP Invoice Value (AO)'], ['booksPayment.total2526','25-26 Total'], ['booksPayment.amountReceived','Amount Received'], ['booksPayment.amountReceivedDate','Amount Received Date'], ['booksPayment.amountPending','Amount Pending'], ['booksPayment.status','Status'], ['booksPayment.remarks','Comments']]],
   ['Deliverables 1', [['deliverables1.teachersCopy','Teachers Copy — Count'], ['deliverables1.teachersCopyDate','Teachers Copy — Date'], ['deliverables1.teachersManual1','Teachers Manual — Count'], ['deliverables1.teachersManual1Date','Teachers Manual — Date'], ['deliverables1.teachersManual2','Teachers Manual 2 — Count'], ['deliverables1.teachersManual2Date','Teachers Manual 2 — Date'], ['deliverables1.flashCards','Flash Card — Count'], ['deliverables1.flashCardsDate','Flash Card — Date']]],
@@ -619,35 +613,6 @@ const historySections = [
 ];
 function getPath(obj, path) { return path.split('.').reduce((v,k) => v?.[k], obj) ?? ''; }
 function setPath(obj, path, value) { const keys=path.split('.'); const out={...obj}; let cur=out; keys.slice(0,-1).forEach(k=>{ cur[k]={...(cur[k]||{})}; cur=cur[k]; }); cur[keys[keys.length-1]]=value; return out; }
-function formatHistoryValue(path, value) {
-  const raw=String(value ?? '').trim();
-  if(!raw) return '';
-  if(path === 'booksPayment.discount' && /^[-+]?\d*\.?\d+$/.test(raw)){
-    const n=Number(raw);
-    if(Number.isFinite(n) && n >= 0 && n <= 1) return `${(n * 100).toFixed(2).replace(/\.?0+$/,'')}%`;
-  }
-  return raw;
-}
-function sanitizeSchoolHistory(history) {
-  const h=history || {};
-  const out={...h, contacts:{...(h.contacts||{})}, booksPayment:{...(h.booksPayment||{})}};
-  for(const key of ['location','vintage','books','category']) {
-    const raw=String(out[key] ?? '').trim();
-    if(!raw) continue;
-    const m=raw.match(/^([A-Z][A-Z ]*)\s*[:：]\s*(.*)$/i);
-    if(m && ['LOCATION','VINTAGE','BOOKS','CATEGORY'].includes(m[1].trim().toUpperCase())) {
-      const label=m[1].trim().toUpperCase();
-      const value=m[2].trim();
-      if(label===key.toUpperCase()) out[key]=value;
-      else if(key==='vintage' || key==='books') out[key]='';
-    }
-  }
-  // Repair the specific legacy corruption produced by the old importer: blank
-  // VINTAGE/BOOKS followed by CATEGORY: X used to copy the category into them.
-  if(/^CATEGORY\s*[:：]/i.test(String(out.vintage||''))) out.vintage='';
-  if(/^CATEGORY\s*[:：]/i.test(String(out.books||''))) out.books='';
-  return out;
-}
 
 function readU16(view, offset) { return view.getUint16(offset, true); }
 function readU32(view, offset) { return view.getUint32(offset, true); }
@@ -868,16 +833,12 @@ function importSchoolHistoryTemplate(cells, current) {
         if(m && m[1].trim()){ found=m[1].trim(); break; }
         if(new RegExp(`^${label}\\s*[:：]?$`, 'i').test(v)){
           const next=xs.find(x=>x.col>xs[i].col && normExcel(x.value));
-          if(next) {
-            const nextValue=normExcel(next.value);
-            const looksLikeLabel=/^(LOCATION|VINTAGE|BOOKS|CATEGORY)\s*[:：]?/i.test(nextValue);
-            if(!looksLikeLabel) { found=nextValue.replace(/^[:：]\s*/,''); break; }
-          }
+          if(next) { found=normExcel(next.value).replace(/^[:：]\\s*/,''); break; }
         }
       }
       if(found) break;
     }
-    if(found && key !== 'location') put(key,found);
+    if(found) put(key,found);
   }
   const schoolName=extractSchoolIdentity(cells).name || '';
 
@@ -921,9 +882,9 @@ function importSchoolHistoryTemplate(cells, current) {
 }
 function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSaved, isPhone, readOnly = false }) {
   const [busy,setBusy]=useState(false); const [problem,setProblem]=useState(null); const [importing,setImporting]=useState(false); const [commentPopup,setCommentPopup]=useState(null);
-  const initial=sanitizeSchoolHistory(school.school_history || {});
+  const initial=school.school_history || {};
   const [draft,setDraft]=useState(initial);
-  useEffect(()=>{ if(!editing) setDraft(sanitizeSchoolHistory(school.school_history || {})); },[school.school_history,editing]);
+  useEffect(()=>{ if(!editing) setDraft(school.school_history || {}); },[school.school_history,editing]);
   const save=async()=>{setBusy(true);setProblem(null);try{const out=await api.admin.updateSchoolHistory(school.location_id,draft,newActionKey());setEditing(false);onSaved?.(out?.school_history || draft);}catch(e){setProblem(e);}finally{setBusy(false);}};
   const importExcel=async(e)=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;setImporting(true);setProblem(null);try{const {cells}=await readXlsxFiles(file);const imported=importSchoolHistoryTemplate(cells,draft);const excelSchool=imported.schoolName;if(excelSchool && excelSchool.toLowerCase().replace(/\s+/g,' ')!==school.name.toLowerCase().replace(/\s+/g,' ')){throw new Error(`This Excel file is for “${excelSchool}”, but you are editing “${school.name}”.`);}setDraft(imported.out);}catch(err){setProblem({message:err.message || 'Could not import that Excel file.'});}finally{setImporting(false);}};
   const filled=historySections.flatMap(([,fields])=>fields).filter(([path])=>String(getPath(initial,path)).trim()).length;
@@ -961,8 +922,7 @@ function SchoolHistoryCard({ T, api, school, editing, setEditing, M, Btn, onSave
             </div>;
           })}
         </div> : <div style={{display:'grid',gap:2}}>
-          {vals.map(([path,label,rawValue])=>{
-            const value=formatHistoryValue(path,rawValue);
+          {vals.map(([path,label,value])=>{
             const numeric=/^[+\-₹$€£]?\s*\d[\d,./%+\- ]*$/.test(value);
             const isComment=/comments|remarks|appComments/i.test(label);
             return <div key={path} style={{display:'grid',gridTemplateColumns:isPhone?'48% 52%':'190px 1fr',gap:isPhone?8:12,alignItems:'start',padding:'6px 0',fontSize:isPhone?12:12,minWidth:0}}>
@@ -1145,9 +1105,9 @@ function SchoolForm({ T, api, school, onClose, onDone, isPhone, Btn }) {
 
         <div style={{ display: 'grid', gridTemplateColumns: isPhone ? '1fr' : '1fr 1fr', gap: 16, marginBottom: 20 }}>
           <div>
-            <div className="mono" style={label}>Zone <span style={{ textTransform: 'none', letterSpacing: 0, color: T.mute }}>(optional)</span></div>
+            <div className="mono" style={label}>Zone</div>
             <input value={f.zone} onChange={(e) => set({ zone: e.target.value })}
-              placeholder="Leave blank; enter later" style={field} />
+              placeholder="Thiruporur" style={field} />
           </div>
           <div>
             <div className="mono" style={label}>Radius (metres)</div>
